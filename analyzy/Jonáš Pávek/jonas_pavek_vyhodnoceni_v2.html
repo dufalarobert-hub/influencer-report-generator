@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vyhodnocení spolupráce - Jonáš Pávek</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        @page {
+            size: A4;
+            margin: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: #F5F5F5;
+            color: #000;
+            line-height: 1.5;
+        }
+
+        .page {
+            width: 210mm;
+            min-height: 297mm;
+            background: #F5F5F5;
+            padding: 13mm;
+            page-break-after: always;
+            position: relative;
+        }
+
+        .page:last-child {
+            page-break-after: avoid;
+        }
+
+        .header {
+            border-bottom: 2px solid #000;
+            padding-bottom: 4mm;
+            margin-bottom: 6mm;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 18px;
+            font-weight: 700;
+            color: #000;
+            letter-spacing: -0.3px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 9px;
+            margin-top: 2mm;
+        }
+
+        h1 {
+            font-size: 34px;
+            font-weight: 700;
+            margin-bottom: 2mm;
+            color: #3333FF;
+            text-transform: uppercase;
+            letter-spacing: -0.5px;
+            line-height: 1;
+        }
+
+        h2 {
+            font-size: 15px;
+            font-weight: 700;
+            color: #3333FF;
+            margin: 3mm 0 1.5mm 0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        h3 {
+            font-size: 11px;
+            font-weight: 600;
+            color: #000;
+            margin: 2mm 0 1mm 0;
+        }
+
+        p {
+            font-size: 9.5px;
+            color: #333;
+            margin-bottom: 2mm;
+        }
+
+        .profile-section {
+            display: grid;
+            grid-template-columns: 180px 1fr;
+            gap: 4mm;
+            margin: 3mm 0;
+            background: #fff;
+            padding: 4mm;
+            border-radius: 8px;
+            border: 2px solid #3333FF;
+        }
+
+        .profile-image {
+            width: 180px;
+            height: auto;
+            border-radius: 8px;
+            border: 2px solid #3333FF;
+        }
+
+        .callout {
+            background: #3333FF;
+            color: #fff;
+            padding: 3mm;
+            border-radius: 6px;
+            margin: 2mm 0;
+            font-weight: 600;
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .callout-success {
+            background: #10b981;
+        }
+
+        .chart-container {
+            background: #fff;
+            border-radius: 8px;
+            padding: 3mm;
+            margin: 2.5mm 0;
+            height: 50mm;
+            position: relative;
+            border: 1px solid #E0E0E0;
+        }
+
+        .chart-container canvas {
+            max-height: 44mm;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 2mm 0;
+            font-size: 9.5px;
+            background: #fff;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        th {
+            background: #3333FF;
+            color: #fff;
+            padding: 2.5mm;
+            text-align: left;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 8.5px;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 2.5mm;
+            border-bottom: 1px solid #E0E0E0;
+            color: #333;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: #F5F5F5;
+        }
+
+        .badge-success {
+            background: #10b981;
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 8px;
+            font-weight: 600;
+        }
+
+        .badge-info {
+            background: #3333FF;
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 8px;
+            font-weight: 600;
+        }
+
+        .badge-warning {
+            background: #f59e0b;
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 8px;
+            font-weight: 600;
+        }
+
+        .footer {
+            position: absolute;
+            bottom: 10mm;
+            left: 15mm;
+            right: 15mm;
+            border-top: 1px solid #E0E0E0;
+            padding-top: 3mm;
+            font-size: 9px;
+            color: #666;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 3mm;
+            margin: 2mm 0;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 3mm;
+            margin: 2mm 0;
+        }
+
+        .box {
+            background: #fff;
+            border: 1px solid #E0E0E0;
+            border-radius: 6px;
+            padding: 3mm;
+        }
+
+        .highlight {
+            color: #3333FF;
+            font-weight: 700;
+        }
+
+        .highlight-green {
+            color: #10b981;
+            font-weight: 700;
+        }
+
+        .metric-box {
+            background: #fff;
+            border: 2px solid #3333FF;
+            border-radius: 6px;
+            padding: 3mm;
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #3333FF;
+            display: block;
+        }
+
+        .metric-label {
+            font-size: 8.5px;
+            color: #666;
+            margin-top: 1.5mm;
+            font-weight: 600;
+        }
+
+        .info-row {
+            margin: 1mm 0;
+            font-size: 9px;
+        }
+
+        .info-label {
+            font-weight: 600;
+            color: #000;
+        }
+
+        .summary-box {
+            background: #E8F5E9;
+            border: 2px solid #10b981;
+            border-radius: 8px;
+            padding: 3mm;
+            margin: 2mm 0;
+        }
+    </style>
+</head>
+<body>
+
+<!-- PAGE 1: BRAND OVERVIEW + EXECUTIVE SUMMARY -->
+<div class="page">
+    <div class="header">
+        <div>
+            <div class="logo">nifty — minds</div>
+            <div class="subtitle">Influencer Marketing Intelligence</div>
+        </div>
+        <div style="text-align: right; font-size: 8px; color: #666;">
+            <div style="font-weight: 600;">VYHODNOCENÍ SPOLUPRÁCE</div>
+            <div>16. marec 2026</div>
+        </div>
+    </div>
+
+    <h1>Jonáš Pávek x Barberco</h1>
+    <p style="color: #666; margin-bottom: 3mm; font-size: 10px;">Campaign Performance Report: Brand Awareness + Performance Marketing</p>
+
+    <div class="profile-section">
+        <img src="Screenshots/Snímka obrazovky 2026-03-16 o 11.09.28.png" class="profile-image" alt="Jonáš Pávek">
+        <div>
+            <div style="margin-bottom: 2mm;">
+                <span style="font-size: 22px; font-weight: 700; color: #3333FF;">72.1K</span>
+                <span style="font-size: 9px; color: #666; margin-left: 2mm;">FOLLOWERS</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Influencer:</span> Jonáš Pávek (@jonaspavek_cut)
+            </div>
+            <div class="info-row">
+                <span class="info-label">Brand:</span> Barberco.cz
+            </div>
+            <div class="info-row">
+                <span class="info-label">Kategória:</span> Premium Barber + Men's Grooming
+            </div>
+            <div class="info-row">
+                <span class="info-label">Dĺžka kampane:</span> Q4 2025 - Q1 2026
+            </div>
+        </div>
+    </div>
+
+    <div class="callout callout-success" style="font-size: 14px;">
+        ✅ KAMPAŇ ÚSPEŠNÁ: 5.23× ROAS | 136 konverzií | 188K paid + 218K organic reach
+    </div>
+
+    <h2>Executive Summary</h2>
+
+    <div class="grid-3">
+        <div class="metric-box">
+            <span class="metric-value">5.23×</span>
+            <span class="metric-label">ROAS<br>(Return on Ad Spend)</span>
+        </div>
+        <div class="metric-box">
+            <span class="metric-value">136</span>
+            <span class="metric-label">Konverzie<br>(Purchases)</span>
+        </div>
+        <div class="metric-box">
+            <span class="metric-value">406K</span>
+            <span class="metric-label">Total Reach<br>(Organic + Paid)</span>
+        </div>
+    </div>
+
+    <h2>Prvotné Tezy vs. Skutočné Výsledky</h2>
+
+    <table style="font-size: 8.5px;">
+        <thead>
+            <tr>
+                <th style="width: 40%;">Pôvodná Téza (Analýza)</th>
+                <th style="width: 40%;">Skutočný Výsledok</th>
+                <th style="width: 20%;">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>ER 4.65%</strong> (nadpriemerný engagement)</td>
+                <td>Organický content: <strong>21K+ videní</strong> na Jonášovom profile</td>
+                <td><span class="badge-success">CONFIRMED</span></td>
+            </tr>
+            <tr>
+                <td><strong>High-quality creative assets</strong> pre Meta Ads</td>
+                <td>Brand-Video2: <strong>11.70× ROAS</strong> (top performer)</td>
+                <td><span class="badge-success">CONFIRMED</span></td>
+            </tr>
+            <tr>
+                <td>Eliminuje production costs <strong>50-100K CZK</strong></td>
+                <td>Content použitý pre 4 kampane → value <strong>100K+ CZK</strong></td>
+                <td><span class="badge-success">CONFIRMED</span></td>
+            </tr>
+            <tr>
+                <td>Predikcia: <strong>Break-even až +30% ROI</strong></td>
+                <td>Skutočný ROAS: <strong>5.23× = +423% ROI</strong></td>
+                <td><span class="badge-success">EXCEEDED</span></td>
+            </tr>
+            <tr>
+                <td>Konzervatívny reach: <strong>185K/Reels</strong></td>
+                <td>Meta Ads reach: <strong>188K</strong> + Organic: <strong>218K</strong></td>
+                <td><span class="badge-success">EXCEEDED</span></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="summary-box">
+        <p style="font-size: 10px; margin: 0; line-height: 1.5;">
+            <strong style="color: #10b981;">✓ VERDICT:</strong> Všetky kľúčové tezy z prvotnej analýzy sa potvrdili. Spolupráca dosiahla LEPŠIE výsledky než predikcia. High-quality barber content mal extrémne vysokú conversion rate (11.70× ROAS na top creative).
+        </p>
+    </div>
+
+    <div class="footer">
+        <span>nifty — minds</span>
+        <span>Strana 1/3</span>
+    </div>
+</div>
+
+<!-- PAGE 2: PERFORMANCE METRICS -->
+<div class="page">
+    <div class="header">
+        <div>
+            <div class="logo">nifty — minds</div>
+            <div class="subtitle">Influencer Marketing Intelligence</div>
+        </div>
+    </div>
+
+    <h2>Brand Awareness Metrics (Organic)</h2>
+
+    <table style="margin: 2mm 0;">
+        <thead>
+            <tr>
+                <th>Platform</th>
+                <th>Reach</th>
+                <th>Engagement</th>
+                <th>Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Jonáš profil (@jonaspavek_cut)</td>
+                <td class="highlight">21,100 videní</td>
+                <td>280 likes, 4 comments</td>
+                <td><span class="badge-success">ORGANIC</span></td>
+            </tr>
+            <tr>
+                <td>Barberco - Video 1</td>
+                <td class="highlight">49,800 videní</td>
+                <td>1,263 likes, 10 comments</td>
+                <td><span class="badge-success">ORGANIC</span></td>
+            </tr>
+            <tr>
+                <td>Barberco - Video 2 (Black Friday)</td>
+                <td class="highlight">147,000 videní</td>
+                <td>10,000+ likes, 46 comments</td>
+                <td><span class="badge-success">ORGANIC</span></td>
+            </tr>
+            <tr style="background: #F5F5F5;">
+                <td><strong>TOTAL ORGANIC REACH</strong></td>
+                <td class="highlight-green"><strong>217,900</strong></td>
+                <td>—</td>
+                <td><strong>~6,500 CZK value</strong></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>Performance Marketing (Meta Ads)</h2>
+
+    <table style="font-size: 8.5px;">
+        <thead>
+            <tr>
+                <th>Kampaň</th>
+                <th>Spend</th>
+                <th>Revenue</th>
+                <th>Purchases</th>
+                <th>ROAS</th>
+                <th>Reach</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Brand-Video2-Jonas</strong></td>
+                <td>1,250 Kč</td>
+                <td class="highlight-green">15,003 Kč</td>
+                <td class="highlight">56</td>
+                <td><strong>11.70×</strong></td>
+                <td>56,872</td>
+            </tr>
+            <tr>
+                <td>VIDEO1</td>
+                <td>500 Kč</td>
+                <td>2,941 Kč</td>
+                <td>9</td>
+                <td>10.69×</td>
+                <td>11,533</td>
+            </tr>
+            <tr>
+                <td>SK_VIDEO1</td>
+                <td>400 Kč</td>
+                <td>1,149 Kč</td>
+                <td>3</td>
+                <td>4.24×</td>
+                <td>4,910</td>
+            </tr>
+            <tr>
+                <td>bf_video (Black Friday)</td>
+                <td>9,000 Kč</td>
+                <td class="highlight-green">39,208 Kč</td>
+                <td class="highlight">68</td>
+                <td>4.01×</td>
+                <td>114,702</td>
+            </tr>
+            <tr style="background: #F5F5F5;">
+                <td><strong>TOTAL</strong></td>
+                <td><strong>11,150 Kč</strong></td>
+                <td class="highlight-green"><strong>58,301 Kč</strong></td>
+                <td><strong>136</strong></td>
+                <td><strong>5.23×</strong></td>
+                <td><strong>188,017</strong></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="chart-container">
+        <canvas id="roasChart"></canvas>
+    </div>
+
+    <h2>Finančný Breakdown</h2>
+
+    <div class="grid-2">
+        <div class="box">
+            <h3 style="font-size: 10px; margin: 0 0 2mm 0;">📊 Ad Performance</h3>
+            <p style="font-size: 9px;"><strong>Total Ad Spend:</strong> 11,150 Kč</p>
+            <p style="font-size: 9px;"><strong>Total Revenue:</strong> <span class="highlight-green">58,301 Kč</span></p>
+            <p style="font-size: 9px;"><strong>Ad Profit Margin:</strong> <span class="highlight-green">+47,151 Kč</span></p>
+            <p style="font-size: 9px; margin-top: 2mm; color: #666;"><em>*Nezahŕňa COGS, influencer fee, shipping</em></p>
+        </div>
+        <div class="box">
+            <h3 style="font-size: 10px; margin: 0 0 2mm 0;">📈 Key Metrics</h3>
+            <p style="font-size: 9px;"><strong>ROAS:</strong> 5.23× (excellent)</p>
+            <p style="font-size: 9px;"><strong>Conversion Rate:</strong> 0.29% (136/466K impressions)</p>
+            <p style="font-size: 9px;"><strong>CPM:</strong> ~23.90 Kč</p>
+            <p style="font-size: 9px;"><strong>Cost per Purchase:</strong> 82 Kč</p>
+        </div>
+    </div>
+
+    <div class="footer">
+        <span>nifty — minds</span>
+        <span>Strana 2/3</span>
+    </div>
+</div>
+
+<!-- PAGE 3: INSIGHTS & RECOMMENDATIONS -->
+<div class="page">
+    <div class="header">
+        <div>
+            <div class="logo">nifty — minds</div>
+            <div class="subtitle">Influencer Marketing Intelligence</div>
+        </div>
+    </div>
+
+    <h2>Key Learnings</h2>
+
+    <div class="grid-2">
+        <div class="box" style="background: #E8F5E9; border: 2px solid #10b981;">
+            <h3 style="color: #10b981; font-size: 10px; margin: 0 0 2mm 0;">✓ Čo fungovalo</h3>
+            <p style="font-size: 8.5px; line-height: 1.5;">
+                <strong>1. Premium barber content:</strong> Brand-Video2 dosiahol 11.70× ROAS - najlepší performer.<br><br>
+                <strong>2. Black Friday timing:</strong> Najvyšší volume (68 purchases) s dobrým ROAS 4.01×.<br><br>
+                <strong>3. Organic amplification:</strong> 218K organických videní = 6.5K Kč bonus value.<br><br>
+                <strong>4. Creative quality:</strong> Professional barber videos mali high conversion rate.
+            </p>
+        </div>
+        <div class="box" style="background: #FFF9E6; border: 2px solid #f59e0b;">
+            <h3 style="color: #f59e0b; font-size: 10px; margin: 0 0 2mm 0;">⚠️ Areas to Improve</h3>
+            <p style="font-size: 8.5px; line-height: 1.5;">
+                <strong>1. SK market:</strong> SK_VIDEO1 mal nižší ROAS (4.24×) - potrebuje lepší localization.<br><br>
+                <strong>2. Creative testing:</strong> Veľký rozdiel medzi top (11.70×) a bottom (4.01×) performance.<br><br>
+                <strong>3. Scaling potential:</strong> Brand-Video2 dostal len 1,250 Kč budget - mohli sme škálovať viac.
+            </p>
+        </div>
+    </div>
+
+    <h2>Strategic Recommendations</h2>
+
+    <table style="font-size: 8.5px;">
+        <thead>
+            <tr>
+                <th style="width: 50%;">Action</th>
+                <th style="width: 30%;">Expected Impact</th>
+                <th style="width: 20%;">Priority</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Škálovať Brand-Video2 creative</strong> na 10-15K Kč/mes budget</td>
+                <td>Potential: +150-200K Kč revenue (11.70× ROAS)</td>
+                <td><span class="badge-success">HIGH</span></td>
+            </tr>
+            <tr>
+                <td><strong>Produkovať 5 nových video formátov</strong> v Jonášovom štýle</td>
+                <td>Optimize creative performance, find next winner</td>
+                <td><span class="badge-success">HIGH</span></td>
+            </tr>
+            <tr>
+                <td><strong>Pokračovať v organickom postovaní</strong> (Jonáš + Barberco)</td>
+                <td>Maintain brand awareness, ~6K Kč/month value</td>
+                <td><span class="badge-success">HIGH</span></td>
+            </tr>
+            <tr>
+                <td><strong>Re-targeting warm audience</strong> (188K reached people)</td>
+                <td>Higher conversion rate, lower CPA</td>
+                <td><span class="badge-warning">MEDIUM</span></td>
+            </tr>
+            <tr>
+                <td><strong>Optimize SK market strategy</strong> (localized creative)</td>
+                <td>Improve ROAS from 4.24× to 7-9×</td>
+                <td><span class="badge-warning">MEDIUM</span></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>Final Verdict</h2>
+
+    <div class="summary-box" style="border: 3px solid #10b981; padding: 4mm;">
+        <div style="text-align: center;">
+            <div style="font-size: 32px; font-weight: 700; color: #10b981; margin-bottom: 2mm;">
+                🚀 POKRAČOVAŤ
+            </div>
+            <div style="font-size: 12px; font-weight: 700; margin-bottom: 2mm;">
+                STRONGLY RECOMMENDED
+            </div>
+            <p style="font-size: 9px; margin: 2mm 0; line-height: 1.5;">
+                <strong>Dôvody:</strong> Kampaň dosiahla 5.23× ROAS (excellent) s top creative 11.70× ROAS. Organický reach 218K je bonus value. Všetky pôvodné tezy sa potvrdili a performance EXCEEDED očakávania.
+            </p>
+        </div>
+    </div>
+
+    <div class="callout" style="font-size: 9px; text-align: left; background: #3333FF;">
+        <strong>Next Steps:</strong> (1) Scale Brand-Video2 na 10-15K budget, (2) Produce 5 new barber video formats, (3) Continue organic posting, (4) Launch re-targeting campaigns, (5) Test SK market with localized content.
+    </div>
+
+    <div class="footer">
+        <span>Sources: Meta Ads Manager, Instagram Analytics | Prepared by: Senior Influencer Marketing Manager</span>
+        <span>Strana 3/3</span>
+    </div>
+</div>
+
+<script>
+    // Chart: ROAS Comparison
+    const ctx1 = document.getElementById('roasChart').getContext('2d');
+    new Chart(ctx1, {
+        type: 'bar',
+        data: {
+            labels: ['Brand-Video2', 'VIDEO1', 'bf_video', 'SK_VIDEO1', 'Industry Avg'],
+            datasets: [{
+                label: 'ROAS',
+                data: [11.70, 10.69, 4.01, 4.24, 3.00],
+                backgroundColor: ['#10b981', '#10b981', '#3333FF', '#3333FF', '#999'],
+                borderWidth: 0,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: { display: false },
+                title: {
+                    display: true,
+                    text: 'ROAS Performance by Campaign (vs Industry Benchmark)',
+                    color: '#000',
+                    font: { size: 11, weight: '700' },
+                    padding: { bottom: 6 }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: 'ROAS (×)',
+                        font: { size: 9 }
+                    },
+                    ticks: {
+                        color: '#666',
+                        font: { size: 7 }
+                    },
+                    grid: { color: '#E0E0E0' }
+                },
+                x: {
+                    ticks: {
+                        color: '#666',
+                        font: { size: 7 }
+                    },
+                    grid: { display: false }
+                }
+            }
+        }
+    });
+</script>
+
+</body>
+</html>

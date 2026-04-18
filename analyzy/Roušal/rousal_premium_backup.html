@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PREMIUM Influencer Analysis - Radek Roušal</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        @page {
+            size: A4;
+            margin: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: #F5F5F5;
+            color: #000;
+            line-height: 1.5;
+        }
+
+        .page {
+            width: 210mm;
+            min-height: 297mm;
+            background: #F5F5F5;
+            padding: 13mm;
+            page-break-after: always;
+            position: relative;
+        }
+
+        .page:last-child {
+            page-break-after: avoid;
+        }
+
+        /* NiftyMinds Branding */
+        .header {
+            border-bottom: 2px solid #000;
+            padding-bottom: 4mm;
+            margin-bottom: 6mm;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 18px;
+            font-weight: 700;
+            color: #000;
+            letter-spacing: -0.3px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 9px;
+            margin-top: 2mm;
+        }
+
+        .premium-badge {
+            background: linear-gradient(135deg, #FFD700, #FFA500);
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 8px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-left: 5px;
+        }
+
+        h1 {
+            font-size: 34px;
+            font-weight: 700;
+            margin-bottom: 2mm;
+            color: #3333FF;
+            text-transform: uppercase;
+            letter-spacing: -0.5px;
+            line-height: 1;
+        }
+
+        h2 {
+            font-size: 15px;
+            font-weight: 700;
+            color: #3333FF;
+            margin: 3mm 0 1.5mm 0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        h3 {
+            font-size: 11px;
+            font-weight: 600;
+            color: #000;
+            margin: 3mm 0 1.5mm 0;
+        }
+
+        p {
+            font-size: 9.5px;
+            color: #333;
+            margin-bottom: 2mm;
+        }
+
+        /* Profile Section */
+        .profile-hero {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 5mm;
+            margin: 4mm 0;
+            align-items: start;
+            background: #fff;
+            padding: 5mm;
+            border-radius: 8px;
+            border: 3px solid #3333FF;
+        }
+
+        .profile-image {
+            width: 250px;
+            height: auto;
+            border-radius: 8px;
+            border: 3px solid #3333FF;
+        }
+
+        .content-grid {
+            width: 100%;
+            max-height: 55mm;
+            height: auto;
+            border-radius: 8px;
+            border: 2px solid #E0E0E0;
+            margin: 3mm 0;
+            display: block;
+            object-fit: contain;
+        }
+
+        /* Profile Stats Box */
+        .profile-box {
+            background: #fff;
+            border: 2px solid #E0E0E0;
+            border-radius: 6px;
+            padding: 3.5mm;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 2.5mm;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #3333FF;
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 8.5px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 1.5mm;
+            font-weight: 600;
+        }
+
+        /* Callout Box */
+        .callout {
+            background: #3333FF;
+            color: #fff;
+            padding: 3mm;
+            border-radius: 6px;
+            margin: 2mm 0;
+            font-weight: 600;
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .callout-large {
+            font-size: 16px;
+            padding: 4.5mm;
+        }
+
+        .callout-premium {
+            background: linear-gradient(135deg, #FFD700, #FFA500);
+            color: #000;
+        }
+
+        /* Chart Container */
+        .chart-container {
+            background: #fff;
+            border-radius: 8px;
+            padding: 3mm;
+            margin: 2.5mm 0;
+            height: 48mm;
+            position: relative;
+            border: 1px solid #E0E0E0;
+        }
+
+        .chart-container canvas {
+            max-height: 42mm;
+        }
+
+        /* Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 2mm 0;
+            font-size: 9.5px;
+            background: #fff;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        th {
+            background: #3333FF;
+            color: #fff;
+            padding: 2.5mm;
+            text-align: left;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 8.5px;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 2.5mm;
+            border-bottom: 1px solid #E0E0E0;
+            color: #333;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: #F5F5F5;
+        }
+
+        /* Risk Badge */
+        .risk-high {
+            background: #ef4444;
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 8px;
+            font-weight: 600;
+        }
+
+        .risk-medium {
+            background: #f59e0b;
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 8px;
+            font-weight: 600;
+        }
+
+        .risk-low {
+            background: #10b981;
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 8px;
+            font-weight: 600;
+        }
+
+        /* Footer */
+        .footer {
+            position: absolute;
+            bottom: 10mm;
+            left: 15mm;
+            right: 15mm;
+            border-top: 1px solid #E0E0E0;
+            padding-top: 3mm;
+            font-size: 9px;
+            color: #666;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Verdict Box */
+        .verdict-box {
+            background: #fff;
+            color: #000;
+            padding: 4mm;
+            border-radius: 8px;
+            margin: 2mm 0;
+            border: 3px solid #3333FF;
+        }
+
+        .verdict-score {
+            font-size: 42px;
+            font-weight: 700;
+            color: #3333FF;
+            text-align: center;
+            margin: 2mm 0;
+        }
+
+        .verdict-text {
+            font-size: 11px;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        /* Grid Layout */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 3mm;
+            margin: 2mm 0;
+        }
+
+        .box {
+            background: #fff;
+            border: 1px solid #E0E0E0;
+            border-radius: 6px;
+            padding: 3mm;
+        }
+
+        .highlight {
+            color: #3333FF;
+            font-weight: 700;
+        }
+
+        /* Check/Cross Icons */
+        .icon-yes::before {
+            content: "✓ ";
+            color: #10b981;
+            font-weight: 700;
+        }
+
+        .icon-no::before {
+            content: "✗ ";
+            color: #ef4444;
+            font-weight: 700;
+        }
+
+        ul {
+            margin-left: 4mm;
+            font-size: 9.5px;
+            color: #333;
+        }
+
+        li {
+            margin: 1.5mm 0;
+        }
+
+        .info-row {
+            margin: 1.5mm 0;
+            font-size: 9.5px;
+        }
+
+        .info-label {
+            font-weight: 600;
+            color: #000;
+        }
+
+        .metrics-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 3mm;
+            margin: 3mm 0;
+        }
+
+        .metric-box {
+            background: #fff;
+            border: 2px solid #3333FF;
+            border-radius: 6px;
+            padding: 3mm;
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 26px;
+            font-weight: 700;
+            color: #3333FF;
+            display: block;
+        }
+
+        .metric-label {
+            font-size: 8.5px;
+            color: #666;
+            margin-top: 1.5mm;
+            font-weight: 600;
+        }
+
+        /* Premium specific */
+        .career-box {
+            background: linear-gradient(135deg, #F0F9FF, #E0F2FE);
+            border: 2px solid #3333FF;
+            border-radius: 6px;
+            padding: 3mm;
+            margin: 2mm 0;
+        }
+
+        .partner-highlight {
+            background: linear-gradient(135deg, #FFF7ED, #FFEDD5);
+            border: 2px solid #FFA500;
+            border-radius: 6px;
+            padding: 3mm;
+            margin: 2mm 0;
+        }
+    </style>
+</head>
+<body>
+
+<!-- PAGE 1 -->
+<div class="page">
+    <div class="header">
+        <div>
+            <div class="logo">nifty — minds<span class="premium-badge">PREMIUM</span></div>
+            <div class="subtitle">Influencer Marketing Intelligence • Web Research Enhanced</div>
+        </div>
+        <div style="text-align: right; font-size: 8px; color: #666;">
+            <div style="font-weight: 600;">PREMIUM ANALÝZA</div>
+            <div>12. marec 2026</div>
+        </div>
+    </div>
+
+    <h1>Radek "Ruchy" Roušal</h1>
+    <p style="color: #666; margin-bottom: 3mm; font-size: 10px;">@rousalruchy | MMA Fighter & Lifestyle Influencer</p>
+
+    <div class="career-box">
+        <h3 style="margin: 0 0 2mm 0; color: #3333FF; font-size: 10px;">🥊 PROFESSIONAL MMA CAREER</h3>
+        <div class="grid-2" style="gap: 2mm;">
+            <div>
+                <p style="margin: 0; font-size: 8.5px;"><strong>Record:</strong> 6-2-0 (Wins-Losses-Draws)</p>
+                <p style="margin: 0; font-size: 8.5px;"><strong>Ranking:</strong> #10 Featherweight (Czech Republic)</p>
+            </div>
+            <div>
+                <p style="margin: 0; font-size: 8.5px;"><strong>Organization:</strong> OKTAGON MMA</p>
+                <p style="margin: 0; font-size: 8.5px;"><strong>Career Start:</strong> 2019</p>
+            </div>
+        </div>
+        <p style="margin-top: 2mm; font-size: 8.5px; font-style: italic;">Known for spectacular walkouts including OKTAGON 45 entrance in orange prison jumpsuit & handcuffs</p>
+    </div>
+
+    <div class="profile-hero">
+        <img src="screenshots/profile.png" class="profile-image" alt="Radek Roušal Profile">
+        <div>
+            <div class="profile-box" style="margin: 0 0 2.5mm 0;">
+                <div class="stat">
+                    <span class="stat-value">125K</span>
+                    <span class="stat-label">Followers</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">599</span>
+                    <span class="stat-label">Príspevky</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">✓</span>
+                    <span class="stat-label">Verified</span>
+                </div>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Bio:</span> @oktagonmma | @dfn_universe Champ 2022
+            </div>
+            <div class="info-row">
+                <span class="info-label">Kategória:</span> Športovec (MMA) + Lifestyle
+            </div>
+            <div class="info-row">
+                <span class="info-label">Partner:</span> Nela Slováková (472K followers) 👥
+            </div>
+            <div class="info-row">
+                <span class="info-label">Merchandise:</span> OKTAGON Official Store 🛍️
+            </div>
+        </div>
+    </div>
+
+    <div class="callout callout-large">
+        🔥 EXTREME VIRALITY: 11× vyšší reach než follower base
+    </div>
+
+    <h2>Performance Overview</h2>
+
+    <div class="metrics-row">
+        <div class="metric-box">
+            <span class="metric-value">1.4M</span>
+            <span class="metric-label">Reach<br>(virálne)</span>
+        </div>
+        <div class="metric-box">
+            <span class="metric-value">375K</span>
+            <span class="metric-label">Reach<br>(štandard)</span>
+        </div>
+        <div class="metric-box">
+            <span class="metric-value">6.44%</span>
+            <span class="metric-label">Engagement Rate<br>(priemer)</span>
+        </div>
+    </div>
+
+    <img src="screenshots/grid.png" class="content-grid" alt="Content Grid">
+
+    <div class="footer">
+        <span>nifty — minds PREMIUM</span>
+        <span>Strana 1/4</span>
+    </div>
+</div>
+
+<!-- PAGE 2 -->
+<div class="page">
+    <div class="header">
+        <div>
+            <div class="logo">nifty — minds<span class="premium-badge">PREMIUM</span></div>
+            <div class="subtitle">Influencer Marketing Intelligence</div>
+        </div>
+    </div>
+
+    <h2>Engagement Analýza</h2>
+
+    <table style="margin: 2mm 0;">
+        <thead>
+            <tr>
+                <th>Typ obsahu</th>
+                <th>Likes</th>
+                <th>Comments</th>
+                <th>ER</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr style="background: #FFF7ED;">
+                <td><strong>Párový obsah (Nela)</strong> 👫</td>
+                <td class="highlight">22 200</td>
+                <td>70</td>
+                <td><strong style="color: #10b981;">17.82%</strong></td>
+            </tr>
+            <tr>
+                <td>OKTAGON príspevok</td>
+                <td>4 863</td>
+                <td>22</td>
+                <td>3.91%</td>
+            </tr>
+            <tr>
+                <td>Lifestyle/Auto</td>
+                <td>2 795</td>
+                <td>5</td>
+                <td>2.24%</td>
+            </tr>
+            <tr>
+                <td>Tréningový obsah</td>
+                <td>2 218</td>
+                <td>16</td>
+                <td>1.79%</td>
+            </tr>
+            <tr style="background: #F5F5F5;">
+                <td><strong>Priemer</strong></td>
+                <td><strong>8 019</strong></td>
+                <td><strong>28</strong></td>
+                <td><strong>6.44%</strong></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="callout-premium callout" style="font-size: 9px; text-align: left;">
+        💡 <strong>PREMIUM INSIGHT:</strong> Párový obsah s Nelou dosahuje 2.8× vyšší engagement než solo content → silná kolaboračná príležitosť!
+    </div>
+
+    <div class="chart-container">
+        <canvas id="reelsChart"></canvas>
+    </div>
+
+    <h2>Finančné Porovnanie</h2>
+
+    <div class="chart-container">
+        <canvas id="costChart"></canvas>
+    </div>
+
+    <div class="callout" style="font-size: 10px;">
+        <strong>ROI:</strong> 90 000 CZK vs. Meta Ads (450 000 CZK) = <span style="font-size: 14px; font-weight: 700;">80% ÚSPORA</span>
+    </div>
+
+    <div class="grid-2">
+        <div class="box">
+            <h3 style="font-size: 10px;">Meta Ads</h3>
+            <p><strong>CPM:</strong> 30 CZK</p>
+            <p><strong>1M videní:</strong> <span class="highlight">30k CZK</span></p>
+            <p><strong>Engagement:</strong> 0.5-1%</p>
+        </div>
+        <div class="box">
+            <h3 style="font-size: 10px;">Radek Roušal</h3>
+            <p><strong>CPM:</strong> ~6 CZK</p>
+            <p><strong>1M videní:</strong> <span class="highlight">15k CZK</span></p>
+            <p><strong>Engagement:</strong> 3-5%</p>
+        </div>
+    </div>
+
+    <div class="footer">
+        <span>nifty — minds PREMIUM</span>
+        <span>Strana 2/4</span>
+    </div>
+</div>
+
+<!-- PAGE 3 -->
+<div class="page">
+    <div class="header">
+        <div>
+            <div class="logo">nifty — minds<span class="premium-badge">PREMIUM</span></div>
+            <div class="subtitle">Influencer Marketing Intelligence</div>
+        </div>
+    </div>
+
+    <h2>Partner Collaboration Analysis 👥</h2>
+
+    <div class="partner-highlight">
+        <h3 style="margin: 0 0 2mm 0; color: #FFA500; font-size: 11px;">🌟 NELA SLOVÁKOVÁ PARTNERSHIP</h3>
+        <div class="grid-2" style="gap: 2mm; margin-bottom: 2mm;">
+            <div>
+                <p style="margin: 0; font-size: 8.5px;"><strong>Her IG:</strong> @nela.slovakova</p>
+                <p style="margin: 0; font-size: 8.5px;"><strong>Her Followers:</strong> 472 000</p>
+                <p style="margin: 0; font-size: 8.5px;"><strong>Status:</strong> Official Couple</p>
+            </div>
+            <div>
+                <p style="margin: 0; font-size: 8.5px;"><strong>Combined Reach:</strong> 597K</p>
+                <p style="margin: 0; font-size: 8.5px;"><strong>Couple Content ER:</strong> 17.82%</p>
+                <p style="margin: 0; font-size: 8.5px;"><strong>Media:</strong> Wife Swap CZ (TV)</p>
+            </div>
+        </div>
+        <div style="background: #fff; padding: 2mm; border-radius: 4px; margin-top: 2mm;">
+            <p style="margin: 0; font-size: 8.5px;"><strong>KEY INSIGHT:</strong> Od vzťahu s Nelou má Radek winning streak v OKTAGON MMA. Couple content je 2.8× efektívnejší než solo posty.</p>
+        </div>
+    </div>
+
+    <h3 style="font-size: 10px; margin-top: 3mm;">Collaboration Opportunities:</h3>
+    <ul style="font-size: 9px; margin-left: 5mm;">
+        <li><strong>Dual Campaigns:</strong> Bundle deal (Radek 125K + Nela 472K) = 597K reach</li>
+        <li><strong>Couple Content:</strong> Lifestyle, travel, wellness brands</li>
+        <li><strong>Cross-Promotion:</strong> His audience → sport/male, Her audience → lifestyle/female</li>
+        <li><strong>TV Exposure:</strong> Reality TV appearances increase brand visibility</li>
+    </ul>
+
+    <h2 style="margin-top: 3mm;">Market Value & Brand Safety</h2>
+
+    <div class="grid-2">
+        <table>
+            <thead>
+                <tr>
+                    <th>Model</th>
+                    <th>Cena/mes.</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Konzervatívny</td>
+                    <td>35-50K</td>
+                    <td><span class="risk-medium">Standard</span></td>
+                </tr>
+                <tr>
+                    <td>Premium</td>
+                    <td>100-150K</td>
+                    <td><span class="risk-high">High</span></td>
+                </tr>
+                <tr style="background: #FFF7ED;">
+                    <td><strong>Ponuka</strong></td>
+                    <td><strong>15K</strong></td>
+                    <td><span class="risk-low">-70%</span></td>
+                </tr>
+                <tr>
+                    <td><strong>+Nela Bundle</strong></td>
+                    <td><strong>60-80K</strong></td>
+                    <td><span class="risk-medium">Deal</span></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Riziko</th>
+                    <th>Level</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Historická kontroverzia</td>
+                    <td><span class="risk-high">VYSOKÉ</span></td>
+                </tr>
+                <tr>
+                    <td>Aktuálne správanie</td>
+                    <td><span class="risk-low">NÍZKE</span></td>
+                </tr>
+                <tr>
+                    <td>Mediálna prezentácia</td>
+                    <td><span class="risk-low">POZ.</span></td>
+                </tr>
+                <tr>
+                    <td>Partner brand value</td>
+                    <td><span class="risk-low">HIGH</span></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="box" style="background: #FFF9E6; border: 1px solid #f59e0b; margin: 2mm 0; padding: 2.5mm;">
+        <h3 style="font-size: 9px; margin: 0 0 1mm 0; color: #f59e0b;">⚠️ Kontext: Historická kontroverzia (Web Research)</h3>
+        <p style="font-size: 8px; margin: 0; line-height: 1.4;"><strong>2019:</strong> Nacistické tetovanie (Hitler portrét) → dočasný ban z OKTAGON MMA. <strong>Riešenie:</strong> Tetovanie odstránené, verejné ospravedlnenie. <strong>Od 2020:</strong> Bez incidentov, clean record, kompetuje pre OKTAGON. <strong>Current Status:</strong> Winning streak, pozitívna mediálna prezentácia. <strong>Riziko:</strong> Legacy search results (staršie články stále online).</p>
+        <p style="font-size: 8px; margin: 1mm 0 0 0; font-weight: 600;">Sources: LowKickMMA.com, OKTAGON MMA Official</p>
+    </div>
+
+    <div class="footer">
+        <span>nifty — minds PREMIUM | Web Research: Tapology, Sherdog, Deník.cz, Extra.cz</span>
+        <span>Strana 3/4</span>
+    </div>
+</div>
+
+<!-- PAGE 4 -->
+<div class="page">
+    <div class="header">
+        <div>
+            <div class="logo">nifty — minds<span class="premium-badge">PREMIUM</span></div>
+            <div class="subtitle">Influencer Marketing Intelligence</div>
+        </div>
+    </div>
+
+    <h2>Additional Revenue Streams & Media Presence</h2>
+
+    <div class="grid-2">
+        <div class="box">
+            <h3 style="font-size: 10px; color: #3333FF;">🛍️ Merchandise</h3>
+            <p style="font-size: 8.5px;"><strong>OKTAGON Official Store:</strong> "Radek Roušal Jersey 2026 - COURAGE"</p>
+            <p style="font-size: 8.5px;"><strong>Monetization:</strong> Additional revenue beyond influencing</p>
+            <p style="font-size: 8.5px;"><strong>Brand Value:</strong> Official partnership s OKTAGON MMA</p>
+        </div>
+        <div class="box">
+            <h3 style="font-size: 10px; color: #3333FF;">📺 Media Exposure</h3>
+            <p style="font-size: 8.5px;"><strong>Reality TV:</strong> Výměna manželek (Wife Swap CZ)</p>
+            <p style="font-size: 8.5px;"><strong>Sports Media:</strong> OKTAGON broadcasts, fight coverage</p>
+            <p style="font-size: 8.5px;"><strong>PR Articles:</strong> Deník.cz, Extra.cz, Vlasta.cz</p>
+        </div>
+    </div>
+
+    <h2 style="margin-top: 3mm;">Brand Fit Analysis</h2>
+
+    <div class="grid-2">
+        <div>
+            <h3 style="color: #10b981; font-size: 10px;">✓ Vhodné pre:</h3>
+            <ul style="list-style: none; margin-left: 0; font-size: 9px;">
+                <li class="icon-yes">Športové značky (Fight gear, fitness)</li>
+                <li class="icon-yes">Energy drinks & performance</li>
+                <li class="icon-yes">Gaming brands (edgy audience)</li>
+                <li class="icon-yes">Automotive (lifestyle)</li>
+                <li class="icon-yes">Male grooming products</li>
+                <li class="icon-yes">Couple brands (s Nelou)</li>
+            </ul>
+        </div>
+        <div>
+            <h3 style="color: #ef4444; font-size: 10px;">✗ Nevhodné pre:</h3>
+            <ul style="list-style: none; margin-left: 0; font-size: 9px;">
+                <li class="icon-no">Conservative corporate brands</li>
+                <li class="icon-no">Family-friendly products</li>
+                <li class="icon-no">Korporátne B2B</li>
+                <li class="icon-no">Finance (bez legal review)</li>
+                <li class="icon-no">NGOs, charity (controversy)</li>
+            </ul>
+        </div>
+    </div>
+
+    <h2 style="margin-top: 3mm;">Final Verdict</h2>
+
+    <div class="verdict-box">
+        <div class="verdict-score">8.65/10</div>
+        <div class="verdict-text">STRONG BUY – with brand safety mitigation & partner collab opportunity</div>
+    </div>
+
+    <div class="callout callout-premium" style="font-size: 9px; text-align: left;">
+        <strong>🎯 PREMIUM RECOMMENDATION:</strong><br>
+        ✅ AKCEPTOVAŤ za 15 000 CZK/mes (solo) alebo vyjednať 60-80K/mes BUNDLE s Nelou (597K combined reach)<br>
+        ✅ Cena 70-85% pod solo market value, ale couple deal je market-appropriate<br>
+        ✅ Požadovať: (1) Pre-approval všetkého obsahu, (2) Brand safety klauzuly, (3) PR crisis management plán<br>
+        ✅ BEST USE CASE: Couple content campaigns (17.82% ER vs 6.44% solo average)
+    </div>
+
+    <div style="background: #E0F2FE; border: 2px solid #3333FF; border-radius: 6px; padding: 3mm; margin: 3mm 0;">
+        <h3 style="margin: 0 0 2mm 0; font-size: 10px; color: #3333FF;">📊 PREMIUM INTELLIGENCE SUMMARY:</h3>
+        <ul style="font-size: 8.5px; margin-left: 5mm; line-height: 1.6;">
+            <li><strong>Career Trajectory:</strong> 6-2-0 MMA record, #10 CZ ranking, winning streak since 2023</li>
+            <li><strong>Partner Synergy:</strong> Nela Slováková (472K) = +376% reach expansion potential</li>
+            <li><strong>Content Performance:</strong> Couple content 2.8× better than solo (17.82% vs 6.44% ER)</li>
+            <li><strong>Media Presence:</strong> TV (Wife Swap), OKTAGON broadcasts, merchandise line</li>
+            <li><strong>Brand Safety:</strong> Historical controversy (2019) fully resolved, current clean record</li>
+            <li><strong>Monetization:</strong> Multi-stream (influencing + MMA + merch + TV)</li>
+            <li><strong>Market Position:</strong> Underpriced at 15K solo, fair at 60-80K bundle deal</li>
+        </ul>
+    </div>
+
+    <div class="footer">
+        <span style="font-size: 8px;">Web Research Sources: Tapology.com, Sherdog.com, OKTAGON MMA, LowKickMMA, Deník.cz, Extra.cz, Vlasta.cz, Prima Ženy | Prepared by: Senior Influencer Marketing Manager</span>
+        <span>Strana 4/4</span>
+    </div>
+</div>
+
+<script>
+    // Chart 1: Reels Performance
+    const ctx1 = document.getElementById('reelsChart').getContext('2d');
+    new Chart(ctx1, {
+        type: 'bar',
+        data: {
+            labels: ['#1', '#2', '#3', '#4', '#5', '#6', '#7', '#8'],
+            datasets: [{
+                label: 'Videnia',
+                data: [2000000, 1500000, 1200000, 1000000, 700000, 600000, 400000, 350000],
+                backgroundColor: '#3333FF',
+                borderColor: '#3333FF',
+                borderWidth: 0,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: {
+                    display: false
+                },
+                title: {
+                    display: true,
+                    text: 'Top 8 Reels Performance (počet videní)',
+                    color: '#000',
+                    font: {
+                        size: 11,
+                        weight: '700'
+                    },
+                    padding: {
+                        bottom: 6
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        color: '#666',
+                        font: {
+                            size: 7
+                        },
+                        callback: function(value) {
+                            return value >= 1000000 ? (value/1000000) + 'M' : (value/1000) + 'K';
+                        }
+                    },
+                    grid: {
+                        color: '#E0E0E0'
+                    }
+                },
+                x: {
+                    ticks: {
+                        color: '#666',
+                        font: {
+                            size: 7
+                        }
+                    },
+                    grid: {
+                        display: false
+                    }
+                }
+            }
+        }
+    });
+
+    // Chart 2: Cost Comparison
+    const ctx2 = document.getElementById('costChart').getContext('2d');
+    new Chart(ctx2, {
+        type: 'bar',
+        data: {
+            labels: ['Meta\n1M', 'Roušal\n1M', 'Meta\n15M', 'Roušal\n15M'],
+            datasets: [{
+                label: 'Náklady (CZK)',
+                data: [30000, 15000, 450000, 90000],
+                backgroundColor: ['#999', '#3333FF', '#999', '#3333FF'],
+                borderWidth: 0,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: {
+                    display: false
+                },
+                title: {
+                    display: true,
+                    text: 'Cost Comparison: Meta Ads vs. Influencer',
+                    color: '#000',
+                    font: {
+                        size: 11,
+                        weight: '700'
+                    },
+                    padding: {
+                        bottom: 6
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        color: '#666',
+                        font: {
+                            size: 7
+                        },
+                        callback: function(value) {
+                            return value >= 1000 ? (value/1000) + 'K' : value;
+                        }
+                    },
+                    grid: {
+                        color: '#E0E0E0'
+                    }
+                },
+                x: {
+                    ticks: {
+                        color: '#666',
+                        font: {
+                            size: 7
+                        }
+                    },
+                    grid: {
+                        display: false
+                    }
+                }
+            }
+        }
+    });
+</script>
+
+</body>
+</html>
