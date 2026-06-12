@@ -37,3 +37,6 @@ Thumbs.db
 app.zip
 app/test-apify.js
 app/test-output.json
+
+# Apify disk cache (v5.1)
+app/.cache/

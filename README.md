@@ -1,4 +1,4 @@
-# NiftyMinds - Influencer Report Generator v5.0
+# NiftyMinds - Influencer Report Generator v5.1
 
 **Automatizovaný systém pre generovanie profesionálnych influencer marketing reportov.**
 
@@ -36,10 +36,14 @@ Otvor: **http://localhost:3001**
 | **Apify Profile Scraper** | Instagram profil + posty | ~$0.15/report |
 | **Apify Reel Scraper** | Presné videoPlayCount (v4.8) | ~$0.05/report |
 | **Apify Comments Scraper** | Analýza komentárov (v4.7) | ~$0.17/report |
-| **Claude Haiku 4.5** | Web research + text generation | ~$0.02-0.05/report |
+| **Claude Opus 4.8** (v5.1) | Web research + text generation | ~$0.20-0.30/report |
 | **Next.js 14** | Frontend & API | Free |
 
-**Celkove naklady:** ~$0.40-0.45/report
+**Celkove naklady:** ~$0.55-0.65/report (opakovaný report do 7 dní: len Claude, Apify ide z cache)
+
+> Pozn.: model sa dá prepnúť v `app/src/lib/claude.ts` (konštanty `RESEARCH_MODEL`,
+> `TEXT_MODEL`, `DISCOVERY_MODEL`) — napr. `claude-haiku-4-5` zníži cenu na ~$0.02-0.05/report
+> za cenu slabšieho researchu.
 
 ---
 
@@ -250,9 +254,15 @@ Na zaklade historickych dat pocitame:
 Vystup: Value Ratio MIN / AVG / MAX
 ```
 
-#### TOTAL VALUE
+#### TOTAL VALUE (v5.1 — bez dvojitého počítania)
 ```
-TOTAL = Reach Value + Engagement Value + Content Value
+TOTAL = max(Reach Value, Engagement Value) + Content Value
+
+Prečo max a nie súčet: keď kupuješ impressions cez Meta Ads, engagement
+dostávaš v cene — Reach a Engagement value sa prekrývajú. Súčet by tú istú
+mediálnu hodnotu počítal dvakrát a tlačil score k BUY.
+(Warm audience premium tiež znížená 1.5 → 1.25, kvalita publika je už
+zohľadnená v dynamickom CPM.)
 
 VALUE RATIO = Total Value / Total Cost
 
@@ -290,13 +300,16 @@ Break-even: 200 predajov (zelene = profitabilne)
 
 Vyssi engagement = viac angazovane publikum = vyssi CTR:
 
+v5.1: CTR znížené na realistické IG hodnoty — Reels nemajú klikateľný link,
+klik ide cez stories sticker / bio. Matica scenárov: CTR 0.5/1/2 % × CR 1/2/3 %.
+
 | ER Rating | Ocakavany CTR | Odporucany scenar |
 |-----------|---------------|-------------------|
-| EXCELLENT | 2.5-3.5% | CTR 3% |
-| GOOD | 1.5-2.5% | CTR 2% |
-| AVERAGE | 1.0-2.0% | CTR 1.5% |
-| BELOW_AVERAGE | 0.5-1.5% | CTR 1% |
-| POOR | 0.5-1.0% | CTR 0.5% |
+| EXCELLENT | 1.0-2.0% | CTR 2% |
+| GOOD | 0.8-1.5% | CTR 1% |
+| AVERAGE | 0.5-1.0% | CTR 1% |
+| BELOW_AVERAGE | 0.3-0.8% | CTR 0.5% |
+| POOR | 0.2-0.5% | CTR 0.5% |
 
 #### C) ODPORUCANY SCENAR
 
@@ -474,9 +487,11 @@ Vazeny priemer styroch komponentov:
 | Komponenta | Vaha | Zdroj |
 |------------|------|-------|
 | Price Score | 40% | Value Ratio |
-| Engagement Score | 25% | ER vs benchmark |
+| Engagement Score | 25% | ER benchmark RATING (v5.1 — size-adjusted, nie absolútne ER) |
 | Reach Score | 20% | Reach multiplier |
-| Brand Safety | 15% | Web research |
+| Brand Safety | 15% | Web research (pri zlyhaní researchu = 5/10 + varovanie v reporte) |
+
+Engagement Score (v5.1): EXCELLENT=10, GOOD=8, AVERAGE=6, BELOW_AVERAGE=4, POOR=2
 
 **Recommendation:**
 - ≥8.0 → STRONG BUY
@@ -646,7 +661,46 @@ Vsechny texty jsou v **ceskem jazyce**.
 
 ## CHANGELOG
 
-### v5.0 (Apríl 2026) - AKTUÁLNA VERZIA
+### v5.1 (Jún 2026) - AKTUÁLNA VERZIA
+
+#### METODIKA (kalibrácia — menej optimistické skóre)
+- **Total Value = max(Reach, Engagement) + Content** — odstránené dvojité počítanie
+  mediálnej hodnoty (engagement je súčasťou nakúpených impressions)
+- **Warm audience premium 1.5 → 1.25** (kvalita publika je už v dynamickom CPM)
+- **Engagement Score z ER benchmark RATINGU** (size-adjusted) — veľké účty už nie sú
+  penalizované za prirodzene nižší absolútny ER
+- **Medián sa používa pre ROI VŽDY** (nie len pri high variance) — odstránený cliff
+  effect na hranici avg/median = 2
+- **Realistické CTR scenáre** — matica 0.5/1/2 % (Reels nemajú klikateľný link)
+- **Zlyhaný web research už nie je tichý** — default brandSafetyScore je 5 (nie 7.5)
+  a report zobrazí výrazné varovanie "brand safety NEPROVĚŘENA"
+
+#### AI (Claude)
+- **Model: claude-opus-4-8** (predtým rok starý claude-sonnet-4-20250514)
+- **Structured outputs** namiesto regex parsovania JSON z textu:
+  - research: forced tool `submit_research` (kompatibilné s web search)
+  - text generation + discovery: `output_config.format` (json_schema)
+- Web search tool aktualizovaný na `web_search_20260209`, adaptive thinking
+- Retry rieši SDK (`maxRetries: 4`), manuálny retry loop odstránený
+- SDK upgrade 0.30 → 0.104
+
+#### INFRAŠTRUKTÚRA
+- **Apify refaktor**: jeden `runApifyActor()` helper namiesto 6× kopírovaného
+  polling kódu (apify.ts: 1334 → ~950 riadkov); mŕtvy kód `fetchReelViews` odstránený
+- **Disková cache pre Apify** (`.cache/apify/`, TTL 7 dní) — opakovaný report toho
+  istého influencera nestojí nič a je okamžitý (vypnutie: `APIFY_CACHE=off`)
+- **Paralelný pipeline**: Reel views + komentáre + web research bežia naraz
+  (~30-60 s úspora na report)
+- **Jeden zdroj typov**: `ReportData` sa importuje z `lib/types.ts`
+  (predtým 3 nezávislé, rozchádzajúce sa kópie v page.tsx a PDFReport.tsx)
+- **Unit testy** výpočtového jadra (`npm test`, vitest, 19 testov)
+- Opravený broken import `DiscoveryParameters` (typ doplnený do types.ts)
+- Opravený 3-mesačný filter správ (v januári odfiltroval aj december)
+- PDF: hardcoded Meta CPM 30K v grafe nahradený dynamickým CPM
+
+---
+
+### v5.0 (Apríl 2026)
 
 #### ENGAGEMENT RATE: PRIEMER vs MEDIÁN vs TRIMMED MEAN
 
@@ -902,4 +956,4 @@ open http://localhost:3001
 ---
 
 *NiftyMinds.cz | Influencer Marketing Intelligence*
-*Verzia: 5.0 | Last Updated: 20. apríl 2026*
+*Verzia: 5.1 | Last Updated: 12. jún 2026*

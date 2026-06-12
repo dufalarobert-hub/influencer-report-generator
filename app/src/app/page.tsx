@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import dynamic from 'next/dynamic'
+import type { ReportData } from '@/lib/types'
 
 // Dynamicky importujeme PDFReport bez SSR (kvoli Chart.js)
 const PDFReport = dynamic(() => import('@/components/PDFReport'), { ssr: false })
@@ -29,108 +30,6 @@ const COUNTRIES = [
   { code: 'IT', name: 'Taliansko', flag: '🇮🇹' },
   { code: 'HU', name: 'Maďarsko', flag: '🇭🇺' },
 ]
-
-interface ReportData {
-  input: {
-    username: string
-    category: string
-    offeredPrice: number
-  }
-  profile: {
-    username: string
-    fullName: string
-    biography: string
-    followersCount: number
-    followsCount: number
-    postsCount: number
-    verified: boolean
-    profilePicUrl: string
-    engagementRate: number
-    avgLikes: number
-    avgComments: number
-    avgVideoViews: number
-    reachMultiplier: number
-  }
-  topPosts: Array<{
-    type: string
-    likesCount: number
-    commentsCount: number
-    videoViewCount?: number
-    caption: string
-  }>
-  topReels: Array<{
-    videoViewCount: number
-  }>
-  research: {
-    fullName: string
-    nickname?: string
-    occupation: string
-    achievements: string[]
-    partnerInfo?: string
-    mediaAppearances?: {
-      tvShows: string[]
-      interviews: string[]
-      articles: string[]
-    }
-    upcomingEvents?: {
-      hasEvents: boolean
-      events: string[]
-    }
-    recentNews?: {
-      hasNews: boolean
-      headlines: string[]
-    }
-    controversies: {
-      found: boolean
-      items?: Array<{
-        description: string
-        severity: string
-        date?: string
-        resolved?: boolean
-      }>
-    }
-    currentBehavior: string
-    mediaPresentation: string
-    brandSafetyScore: number
-    suitableBrands: string[]
-    unsuitableBrands: string[]
-    sources?: string[]
-  }
-  metrics: {
-    engagementRate: number
-    reachMultiplier: number
-    marketValue: {
-      conservativeLow: number
-      conservativeHigh: number
-      premiumLow: number
-      premiumHigh: number
-    }
-    roi: {
-      savingsPercent: number
-      savingsAmount: number
-      influencerCPM: number
-      totalContractValue: number
-      metaAdsEquivalent: number
-    }
-    score: {
-      finalScore: number
-      recommendation: string
-      priceScore: number
-      engagementScore: number
-      reachScore: number
-      brandSafetyScore: number
-    }
-  }
-  text: {
-    heroSubtitle: string
-    bioSummary?: string
-    mediaHighlights?: string
-    controversyContext?: string
-    upcomingEventsText?: string
-    recommendationText: string
-    verdictText: string
-  }
-}
 
 export default function Home() {
   // Report Generator state

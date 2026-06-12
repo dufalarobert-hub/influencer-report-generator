@@ -5,9 +5,24 @@
  * - Web research (kontroverzie, background, médiá)
  * - Brand safety assessment
  * - Generovanie odporúčaní
+ *
+ * v5.1:
+ * - Model: claude-opus-4-8 (predtým rok starý claude-sonnet-4-20250514)
+ * - Structured outputs namiesto regex parsovania JSON z textu:
+ *   - research: forced tool "submit_research" (kompatibilné s web search citáciami)
+ *   - text generation + discovery: output_config.format json_schema
+ * - Zlyhaný research už nie je tichý — result nesie researchUnavailable: true
+ * - Retry rieši SDK (maxRetries), manuálny retry loop odstránený
  */
 
 import Anthropic from '@anthropic-ai/sdk'
+import { DiscoveryParameters } from './types'
+
+// Modely. Research je kvalitatívne kritický (brand safety due diligence).
+// Pre úsporu je možné TEXT_MODEL / DISCOVERY_MODEL prepnúť na 'claude-haiku-4-5'.
+const RESEARCH_MODEL = 'claude-opus-4-8'
+const TEXT_MODEL = 'claude-opus-4-8'
+const DISCOVERY_MODEL = 'claude-opus-4-8'
 
 // Types
 export interface BrandPartnership {
@@ -17,7 +32,7 @@ export interface BrandPartnership {
   isCompetitor?: boolean
   category?: string
 
-  // NEW - classification signals
+  // classification signals
   signals?: {
     hasHashtag: boolean       // #ad, #sponsored
     hasDiscountCode: boolean  // NATY20, -10%
@@ -28,7 +43,7 @@ export interface BrandPartnership {
   isLongTerm?: boolean        // >3 mesiace alebo v bio
 }
 
-// NEW - Overcommercialization detection
+// Overcommercialization detection
 export interface CommercializationRisk {
   totalBrandMentions: number
   paidPartnerships: number
@@ -38,7 +53,7 @@ export interface CommercializationRisk {
   warning?: string
 }
 
-// NEW - Source credibility
+// Source credibility
 export interface SourceCredibility {
   source: string
   credibility: 'HIGH' | 'MEDIUM' | 'LOW'
@@ -72,7 +87,7 @@ export interface WebResearchResult {
     headlines: string[]    // Posledné správy/novinky
   }
 
-  // Brand partnerships (NEW)
+  // Brand partnerships
   brandPartnerships: {
     found: boolean
     partnerships: BrandPartnership[]
@@ -92,7 +107,7 @@ export interface WebResearchResult {
     }>
   }
 
-  // NEW - Commercialization risk
+  // Commercialization risk
   commercializationRisk?: CommercializationRisk
   currentBehavior: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE'
   mediaPresentation: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE'
@@ -104,6 +119,10 @@ export interface WebResearchResult {
 
   // Sources
   sources: string[]
+
+  // v5.1: true = web research ZLYHAL a toto sú default hodnoty.
+  // Report MUSÍ zobraziť varovanie — brandSafetyScore nie je overený!
+  researchUnavailable?: boolean
 }
 
 export interface ReportTextContent {
@@ -118,6 +137,7 @@ export interface ReportTextContent {
 
 /**
  * Initialize Anthropic client
+ * SDK automaticky retryuje 429/5xx s exponential backoffom (maxRetries)
  */
 function getClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -126,7 +146,7 @@ function getClient(): Anthropic {
     throw new Error('ANTHROPIC_API_KEY is not configured')
   }
 
-  return new Anthropic({ apiKey })
+  return new Anthropic({ apiKey, maxRetries: 4 })
 }
 
 /**
@@ -134,7 +154,6 @@ function getClient(): Anthropic {
  */
 function sanitizeText(text: string): string {
   if (!text) return ''
-  // Remove surrogate pairs and other problematic characters
   return text
     .replace(/[\uD800-\uDFFF]/g, '') // Remove surrogate pairs
     .replace(/[\u0000-\u001F]/g, ' ') // Remove control characters
@@ -148,15 +167,10 @@ function sanitizeText(text: string): string {
  */
 function removeCyrillic(text: string): string {
   if (!text) return ''
-  // Remove Cyrillic characters (U+0400-U+04FF)
-  // Remove Arabic, Hebrew, and other non-Latin scripts
   return text
-    .replace(/[\u0400-\u04FF]/g, '') // Cyrillic
-    .replace(/[\u0600-\u06FF]/g, '') // Arabic
-    .replace(/[\u0590-\u05FF]/g, '') // Hebrew
-    .replace(/[\u4E00-\u9FFF]/g, '') // Chinese
-    .replace(/[\u3040-\u309F]/g, '') // Japanese Hiragana
-    .replace(/[\u30A0-\u30FF]/g, '') // Japanese Katakana
+    .replace(/[Ѐ-ӿ]/g, '') // Cyrillic
+    .replace(/[؀-ۿ]/g, '') // Arabic
+    .replace(/[֐-׿]/g, '') // Hebrew
     .replace(/\s+/g, ' ') // Normalize whitespace
     .trim()
 }
@@ -183,7 +197,6 @@ function cleanObjectFromCitations(obj: unknown): unknown {
   if (Array.isArray(obj)) {
     return obj.map(item => cleanObjectFromCitations(item))
       .filter(item => {
-        // Remove empty strings after cleaning
         if (typeof item === 'string') return item.length > 0
         return true
       })
@@ -247,7 +260,6 @@ function classifyControversySeverity(description: string): 'CRITICAL' | 'HIGH' |
 
   // First check if it's just relationship gossip - not a real controversy
   if (GOSSIP_KEYWORDS.some(keyword => lowerDesc.includes(keyword))) {
-    // Check if there's something more serious combined with it
     const hasSerious = SEVERITY_KEYWORDS.CRITICAL.some(k => lowerDesc.includes(k)) ||
                        SEVERITY_KEYWORDS.HIGH.some(k => lowerDesc.includes(k))
     if (!hasSerious) {
@@ -266,51 +278,26 @@ function classifyControversySeverity(description: string): 'CRITICAL' | 'HIGH' |
 
 /**
  * Filter out old content - keep only last 3 months
- * Filters: events, news, articles, interviews
+ * v5.1 fix: predtým "year < currentYear → vyhodiť", čo v januári odfiltrovalo
+ * aj december predošlého roka. Teraz počítame valídne roky z 3-mesačného okna.
  */
 function filterOldContent(result: WebResearchResult): WebResearchResult {
   const now = new Date()
   const currentYear = now.getFullYear()
-  const currentMonth = now.getMonth() + 1 // 1-12
 
-  // Calculate which months are valid (last 3 months)
-  // For March 2026: valid = Jan 2026, Feb 2026, Mar 2026
-  const validMonths: string[] = []
-  const czechMonths = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen',
-                       'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec']
-  const shortMonths = ['led', 'úno', 'bře', 'dub', 'kvě', 'čer', 'čvc', 'srp', 'zář', 'říj', 'lis', 'pro']
-
+  // Years that fall inside the last-3-months window (handles year boundary)
+  const validYears = new Set<number>()
   for (let i = 0; i < 3; i++) {
-    let month = currentMonth - i
-    let year = currentYear
-    if (month <= 0) {
-      month += 12
-      year -= 1
-    }
-    validMonths.push(`${year}`)
-    validMonths.push(czechMonths[month - 1])
-    validMonths.push(shortMonths[month - 1])
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    validYears.add(d.getFullYear())
   }
 
-  // Helper function to check if content is recent (last 3 months)
   const isRecent = (text: string): boolean => {
-    const lowerText = text.toLowerCase()
-
-    // Check for year - if old year, filter out
     const yearMatch = text.match(/\b(20\d{2})\b/)
     if (yearMatch) {
       const year = parseInt(yearMatch[1])
-      // Only allow current year (for recent months) or explicit recent months
-      if (year < currentYear) {
-        return false
-      }
+      if (!validYears.has(year)) return false
     }
-
-    // Check for old month patterns like "2024", "2023", etc.
-    if (/\b(201\d|202[0-4])\b/.test(text)) {
-      return false
-    }
-
     return true
   }
 
@@ -318,8 +305,8 @@ function filterOldContent(result: WebResearchResult): WebResearchResult {
   if (result.upcomingEvents?.events) {
     result.upcomingEvents.events = result.upcomingEvents.events.filter(event => {
       const lowerEvent = event.toLowerCase()
-      // Check if event contains a past year
-      if (/\b(201\d|202[0-5])\b/.test(event) && !event.includes(String(currentYear))) {
+      const yearMatch = event.match(/\b(20\d{2})\b/)
+      if (yearMatch && parseInt(yearMatch[1]) < currentYear) {
         console.log(`[Claude] Filtering out past event: ${event}`)
         return false
       }
@@ -457,6 +444,98 @@ const COUNTRY_CONFIG: Record<string, {
 }
 
 /**
+ * JSON Schema for the submit_research tool — guarantees parsed, validated input
+ * instead of regex-matching JSON out of free text.
+ */
+const RESEARCH_TOOL_SCHEMA = {
+  type: 'object' as const,
+  properties: {
+    fullName: { type: 'string' },
+    nickname: { type: 'string', description: 'Prezývka ak existuje, inak prázdny string' },
+    occupation: { type: 'string' },
+    achievements: { type: 'array', items: { type: 'string' } },
+    partnerInfo: { type: 'string', description: 'PRÁZDNY string ak nemáš 100% overený zdroj' },
+    mediaAppearances: {
+      type: 'object',
+      properties: {
+        tvShows: { type: 'array', items: { type: 'string' } },
+        interviews: { type: 'array', items: { type: 'string' } },
+        articles: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['tvShows', 'interviews', 'articles'],
+    },
+    upcomingEvents: {
+      type: 'object',
+      properties: {
+        hasEvents: { type: 'boolean' },
+        events: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['hasEvents', 'events'],
+    },
+    recentNews: {
+      type: 'object',
+      properties: {
+        hasNews: { type: 'boolean' },
+        headlines: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['hasNews', 'headlines'],
+    },
+    brandPartnerships: {
+      type: 'object',
+      properties: {
+        found: { type: 'boolean' },
+        partnerships: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              brandName: { type: 'string' },
+              type: { type: 'string', enum: ['paid', 'organic', 'unknown'] },
+              date: { type: 'string' },
+              category: { type: 'string' },
+            },
+            required: ['brandName', 'type'],
+          },
+        },
+        organicBrands: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['found', 'partnerships', 'organicBrands'],
+    },
+    controversies: {
+      type: 'object',
+      properties: {
+        found: { type: 'boolean' },
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              description: { type: 'string' },
+              severity: { type: 'string', enum: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] },
+              date: { type: 'string' },
+              resolved: { type: 'boolean' },
+            },
+            required: ['description', 'severity'],
+          },
+        },
+      },
+      required: ['found', 'items'],
+    },
+    currentBehavior: { type: 'string', enum: ['POSITIVE', 'NEUTRAL', 'NEGATIVE'] },
+    mediaPresentation: { type: 'string', enum: ['POSITIVE', 'NEUTRAL', 'NEGATIVE'] },
+    brandSafetyScore: { type: 'number', description: '1-10, podľa škály v zadaní' },
+    suitableBrands: { type: 'array', items: { type: 'string' } },
+    unsuitableBrands: { type: 'array', items: { type: 'string' } },
+    sources: { type: 'array', items: { type: 'string' } },
+  },
+  required: [
+    'fullName', 'occupation', 'achievements', 'mediaAppearances', 'upcomingEvents',
+    'recentNews', 'brandPartnerships', 'controversies', 'currentBehavior',
+    'mediaPresentation', 'brandSafetyScore', 'suitableBrands', 'unsuitableBrands', 'sources',
+  ],
+}
+
+/**
  * Perform web research on an influencer
  */
 export async function performWebResearch(
@@ -465,7 +544,7 @@ export async function performWebResearch(
   category: string,
   biography: string,
   postCaptions?: string[],
-  country: string = 'CZ' // NEW: influencer's country
+  country: string = 'CZ'
 ): Promise<WebResearchResult> {
   const client = getClient()
 
@@ -475,16 +554,14 @@ export async function performWebResearch(
   const countryConfig = COUNTRY_CONFIG[country] || COUNTRY_CONFIG['CZ']
 
   // Prepare post captions for brand analysis (sanitized)
-  // Zvýšené na 20 captionov a 350 znakov pre lepšiu detekciu partnerstiev
   const captionsForAnalysis = postCaptions
-    ? postCaptions.slice(0, 20).map((c, i) => `${i+1}. ${sanitizeText(c).substring(0, 350)}`).join('\n')
+    ? postCaptions.slice(0, 20).map((c, i) => `${i + 1}. ${sanitizeText(c).substring(0, 350)}`).join('\n')
     : 'N/A'
 
-  // Sanitize all text inputs
   const safeName = sanitizeText(fullName)
   const safeBio = sanitizeText(biography).substring(0, 500)
 
-  const prompt = `DÔLEŽITÉ: Použi web_search tool na vyhľadanie OVERENÝCH informácií o tejto osobe!
+  const prompt = `DÔLEŽITÉ: Použi web_search tool na vyhľadanie OVERENÝCH informácií o tejto osobe a výsledok odovzdaj cez nástroj submit_research!
 
 OSOBA: ${safeName} (@${username})
 KATEGÓRIA: ${category}
@@ -499,11 +576,6 @@ Hľadaj v jazyku: ${countryConfig.searchLang}
 2. "${safeName}" interview ${currentYear} - aktuálne rozhovory
 3. "${safeName}" ${countryConfig.controversyKeywords} - brand safety
 4. "${safeName}" ${countryConfig.partnershipKeywords} - brand partnerships
-
-DÔLEŽITÉ PRE VYHĽADÁVANIE:
-- Influencer je z krajiny ${countryConfig.name} → hľadaj v lokálnych médiách tejto krajiny
-- Použij kľúčové slová v jazyku: ${countryConfig.searchLang}
-- Hľadaj aj v medzinárodných médiách ak je influencer známy globálne
 
 ⚠️ KRITICKÉ PRAVIDLÁ - DODRŽUJ:
 1. NEPÍŠ informácie o vzťahoch/rozvodoch/deťoch ak to nie je 100% overené z dôveryhodného zdroja
@@ -521,103 +593,52 @@ UPCOMINGEVENTS: Uvádzaj LEN BUDOUCÍ eventy (po dnešním datu)!
 - Pokud nemáš info o budoucích eventech, nech events: []
 
 🌐 JAZYK VÝSTUPU: Piš POUZE v ČEŠTINĚ nebo SLOVENŠTINĚ!
-- NEPOUŽÍVEJ azbyku (ruštinu, bulharštinu, ukrajinštinu)
-- NEPOUŽÍVEJ jiné jazyky (němčina, angličtina) kromě názvů značek
+- NEPOUŽÍVEJ azbuku ani jiné jazyky kromě názvů značek
 - Pokud najdeš info v cizím jazyce, PŘELOŽ do češtiny
 
 ČO PATRÍ DO recentNews.headlines:
-✅ "Forbes január 2025: Rozhovor o podnikaní"
-✅ "Refresher február 2025: Nový podcast"
-✅ "iDnes 2025: Získal cenu Blogger roka"
+✅ "Forbes leden ${currentYear}: Rozhovor o podnikaní"
+✅ "iDnes ${currentYear}: Získal cenu Blogger roka"
 
 ČO NEPATRÍ DO recentNews.headlines:
 ❌ Správy staršie ako 3 mesiace
-❌ "Odfotil sa s fanúšikom"
-❌ "Bol na párty"
-❌ "Zverejnil nové foto"
-
-DÔLEŽITÉ PRE VÝSTUP:
-- fullName: použi len meno a priezvisko, NIE prezývky
-- nickname: prezývka ak existuje
-- partnerInfo: NECHAJ PRÁZDNE ak nemáš 100% overený zdroj!
-- recentNews.headlines: len SKUTOČNÉ mediálne články z POSLEDNÍCH 3 MĚSÍCŮ
-- mediaAppearances.articles: POUZE články z POSLEDNÍCH 3 MĚSÍCŮ! (s datem 2026)
-- mediaAppearances.interviews: POUZE rozhovory z POSLEDNÍCH 3 MĚSÍCŮ! (s datem 2026)
-- NEPOUŽÍVAJ cite tagy, len čistý text
+❌ "Odfotil sa s fanúšikom", "Bol na párty", "Zverejnil nové foto"
 
 KROK 2 - ANALYZUJ BIO NA SPOLUPRÁCE:
 BIO: "${safeBio}"
 
-DÔLEŽITÉ! V bio hľadaj:
-- Zmienky značiek (@ mentions)
-- Zľavové kódy (napr. "kod: NATY20", "code:", "-10%")
-- Ambassador/partner zmienky
-- Odkazy na spolupráce
+V bio hľadaj: zmienky značiek (@ mentions), zľavové kódy ("kod: NATY20", "-10%"),
+ambassador/partner zmienky, odkazy na spolupráce.
 Ak nájdeš značky v bio, PRIDAJ ich do brandPartnerships!
 
 KROK 3 - ANALYZUJ CAPTIONS PRE BRAND PARTNERSHIPS:
 ${captionsForAnalysis}
 
-DÔLEŽITÉ! V captionoch hľadaj VŠETKY tieto signály:
-
-A) HASHTAGS pre platenú spoluprácu:
-   #ad, #sponsored, #partner, #collab, #reklama, #spolupráca, #advertisement, #promo, #gifted, #darek
-
-B) @MENTIONS značiek (nie osobné účty!):
-   Hľadaj @názov kde názov je firma/brand (napr. @nike, @notino_cz, @dm_cesko)
-   IGNORUJ osobné účty priateľov
-
-C) ZĽAVOVÉ KÓDY v texte:
-   - "kod: XYZ", "code: XYZ", "kód: XYZ"
-   - "-10%", "-15%", "-20%" + názov značky
-   - "ZĽAVA", "SLEVA", "DISCOUNT"
-   - Meno influencera ako kód (napr. "NATY20", "EVA15")
-
-D) AFFILIATE/PRODUCT LINKY:
-   - "link v bio", "odkaz v bio", "link in bio"
-   - bit.ly, linktr.ee, amzn.to, shopify odkazy
-   - "kúpiš tu:", "objednaj na:", "nájdeš na:"
-
-E) FRÁZY O SPOLUPRÁCI:
-   - "v spolupráci s", "spolupracujem s", "partner"
-   - "darček od", "gift from", "dostala som od"
-   - "ambasádor", "ambassador", "tvár značky"
-   - "reklamná spolupráca", "paid partnership"
+V captionoch hľadaj VŠETKY tieto signály:
+A) HASHTAGS: #ad, #sponsored, #partner, #collab, #reklama, #spolupráca, #promo, #gifted, #darek
+B) @MENTIONS značiek (nie osobné účty! napr. @nike, @notino_cz)
+C) ZĽAVOVÉ KÓDY: "kod: XYZ", "-10%", "SLEVA", meno influencera ako kód (NATY20)
+D) AFFILIATE LINKY: "link v bio", bit.ly, linktr.ee
+E) FRÁZY: "v spolupráci s", "darček od", "ambasádor", "paid partnership"
 
 Každú nájdenú značku PRIDAJ do brandPartnerships s typom:
 - "paid" ak je tam #ad/#sponsored alebo "spolupráca"
 - "unknown" ak je tam len @mention alebo zľavový kód
 
 KROK 4 - BRAND PARTNERSHIPS Z WEBU:
-Zaznamenaj všetky značky s ktorými influencer spolupracuje/spolupracoval:
-- Ambasádorstvá (dlhodobé partnerstvá)
-- Reklamné kampane
-- Sponzorované príspevky
-- Product placement
-
-KROK 5 - PO VYHĽADANÍ vráť JSON s nájdenými informáciami:
+Zaznamenaj všetky značky s ktorými influencer spolupracuje/spolupracoval
+(ambasádorstvá, kampane, sponzorované príspevky, product placement).
 
 KRITICKÉ PRE BRAND SAFETY - hľadaj TIETO typy kontroverzií:
-- Politické vyjadrenia, extrémizmus
-- Rasizmus, xenofóbia, homofóbia
-- Drogy, alkohol, gambling propagácia
-- OnlyFans, adult content
+- Politické vyjadrenia, extrémizmus, rasizmus, xenofóbia
+- Drogy, alkohol, gambling propagácia, OnlyFans/adult content
 - Podvody, súdne spory, trestné činy
-- Agresívne správanie, fyzické konflikty
-- Klamlivá reklama, crypto/NFT scamy
+- Agresívne správanie, klamlivá reklama, crypto/NFT scamy
 - Bojkoty značiek kvôli jeho správaniu
 
 ⚠️ ČO NIE JE KONTROVERZIA (NEZAHRŇUJ):
-❌ Vzťahové dramy, rozchody, romániky
-❌ Špekulácie o randení ("tvoria pár?")
-❌ Celebrity gossip bez reálneho dopadu
-❌ Bežné hádky na sociálnych sieťach
-❌ Neoverené klebety z bulváru
-
-⚠️ PRE SKUTOČNÉ KONTROVERZIE:
-- Uveď ROK kedy sa to stalo
-- Uveď či je to VYRIEŠENÉ alebo stále aktuálne
-- NEZAHRŇUJ vzťahové dramy - tie nepoškodzujú značky!
+❌ Vzťahové dramy, rozchody, romániky, špekulácie o randení
+❌ Celebrity gossip bez reálneho dopadu, neoverené klebety z bulváru
 
 brandSafetyScore škála:
 - 1-2: KRITICKÉ (extrémizmus, trestné činy, aktuálne súdne spory)
@@ -626,147 +647,112 @@ brandSafetyScore škála:
 - 7-8: NÍZKE RIZIKO (drobné alebo neznámy, čistá história)
 - 9-10: BEZPEČNÝ (overene čistý profil, žiadne nálezy)
 
-ODPOVEĎ - po web search vráť IBA ČISTÝ JSON (bez cite tagov!):
-{"fullName":"${safeName}","nickname":"","occupation":"","achievements":[],"partnerInfo":"","mediaAppearances":{"tvShows":[],"interviews":[],"articles":[]},"upcomingEvents":{"hasEvents":false,"events":[]},"recentNews":{"hasNews":false,"headlines":[]},"brandPartnerships":{"found":false,"partnerships":[],"organicBrands":[]},"controversies":{"found":false,"items":[]},"currentBehavior":"NEUTRAL","mediaPresentation":"NEUTRAL","brandSafetyScore":7,"suitableBrands":[],"unsuitableBrands":[],"sources":[]}
-
-PRÍKLADY SPRÁVNEHO FORMÁTU:
-- fullName: "Eva Adamczyková" (len meno, nie prezývky)
-- nickname: "Krůta" (prezývka samostatne)
-- partnerInfo: "" (NECHAJ PRÁZDNE ak nemáš 100% overený zdroj!)
-- mediaAppearances.tvShows: ["StarDance 2025", "Survivor"] (TV show můžou být i starší)
-- mediaAppearances.articles: ["Forbes únor 2026: Rozhovor o kariéře", "Refresher březen 2026: Jak buduje značku"] ← MAX 3 MĚSÍCE!
-- mediaAppearances.interviews: ["Podcast XY leden 2026", "TV Prima únor 2026"] ← MAX 3 MĚSÍCE!
-- recentNews.headlines: ["Forbes březen 2026: Top 30 pod 30", "iDnes únor 2026: Získal ocenění"] ← MAX 3 MĚSÍCE!
-- upcomingEvents.events: ["Koncert Praha duben 2026", "Festival léto 2026"] ← LEN BUDOUCÍ!
-
-❌ ŠPATNĚ (staré eventy - NEZAHRŇUJ):
-- upcomingEvents.events: ["Koncert 2024", "Festival léto 2025"]
-
-PRÍKLADY KONTROVERZIE (ak nájdeš):
-"controversies":{"found":true,"items":[
-  {"description":"2019: Kritika za klamlivú reklamu na detox čaj","severity":"MEDIUM","date":"2019","resolved":true},
-  {"description":"2022: Kontroverzia okolo crypto projektu","severity":"HIGH","date":"2022","resolved":false}
-]}
-
-Príklad brandPartnerships:
-"brandPartnerships":{"found":true,"partnerships":[
-  {"brandName":"Nike","type":"paid","category":"Sport","date":"2024"}
-],"organicBrands":["Apple","Mercedes"]}
-
+KROK 5 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETKÝMI nájdenými informáciami.
 ⚠️ ZAPAMÄTAJ SI: Radšej nechaj pole PRÁZDNE ako písať neoverené informácie!`
 
-  // Retry logic for rate limits
-  const maxRetries = 3
-  let lastError: Error | null = null
+  try {
+    const messages: Anthropic.MessageParam[] = [{ role: 'user', content: prompt }]
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`[Claude] Web research attempt ${attempt}/${maxRetries}...`)
+    const createParams = {
+      model: RESEARCH_MODEL,
+      max_tokens: 16000,
+      thinking: { type: 'adaptive' as const },
+      tools: [
+        {
+          type: 'web_search_20260209' as const,
+          name: 'web_search' as const,
+          max_uses: 5,
+        },
+        {
+          name: 'submit_research',
+          description: 'Odovzdaj finálne výsledky researchu o influencerovi. Zavolaj PRÁVE RAZ na konci, po dokončení všetkých web searchov.',
+          input_schema: RESEARCH_TOOL_SCHEMA,
+        },
+      ],
+    }
 
-      const response = await client.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4096,
-        tools: [
-          {
-            type: 'web_search_20250305',
-            name: 'web_search',
-            max_uses: 5,
-          } as unknown as Anthropic.Tool,
-        ],
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-      })
+    let response = await client.messages.create({ ...createParams, messages } as Anthropic.MessageCreateParamsNonStreaming)
 
-      // Log what we got back
-      console.log('[Claude] Response stop_reason:', response.stop_reason)
-      console.log('[Claude] Content blocks:', response.content.length)
+    // Server-side web search môže vrátiť pause_turn — pokračuj v ture
+    let continuations = 0
+    while (response.stop_reason === 'pause_turn' && continuations < 5) {
+      messages.push({ role: 'assistant', content: response.content })
+      response = await client.messages.create({ ...createParams, messages } as Anthropic.MessageCreateParamsNonStreaming)
+      continuations++
+    }
 
-      // Extract text response and log block types
-      let textContent = ''
-      for (const block of response.content) {
-        console.log('[Claude] Block type:', block.type)
-        if (block.type === 'text') {
-          textContent += block.text
-        }
-      }
+    console.log('[Claude] Response stop_reason:', response.stop_reason)
 
-      console.log('[Claude] Raw response:', textContent.substring(0, 500))
+    // Extract the submit_research tool call
+    const toolUse = response.content.find(
+      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'submit_research'
+    )
 
-      // Parse JSON from response
+    let rawResult: unknown
+    if (toolUse) {
+      rawResult = toolUse.input
+    } else {
+      // Fallback: model skončil textom — skús nájsť JSON v texte
+      const textContent = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map(b => b.text)
+        .join('')
       const jsonMatch = textContent.match(/\{[\s\S]*\}/)
       if (!jsonMatch) {
-        console.error('[Claude] Could not find JSON in response')
+        console.error('[Claude] No submit_research tool call and no JSON in text')
         return getDefaultResearchResult(fullName, category)
       }
-
-      try {
-        const rawResult = JSON.parse(jsonMatch[0])
-        // Clean all citation tags and Cyrillic from the result
-        let result = cleanObjectFromCitations(rawResult) as WebResearchResult
-
-        // POST-PROCESSING: Enhance result with classification logic
-
-        // 0. Filter out old events and news
-        result = filterOldContent(result)
-        console.log(`[Claude] After filtering: ${result.upcomingEvents?.events?.length || 0} events, ${result.recentNews?.headlines?.length || 0} news`)
-
-        // 1. Re-classify controversy severities based on keywords
-        if (result.controversies?.items) {
-          result.controversies.items = result.controversies.items.map(item => ({
-            ...item,
-            severity: classifyControversySeverity(item.description)
-          }))
-        }
-
-        // 2. Calculate commercialization risk
-        if (result.brandPartnerships?.partnerships) {
-          const totalPosts = postCaptions?.length || 12
-          result.commercializationRisk = calculateCommercializationRisk(
-            result.brandPartnerships.partnerships,
-            totalPosts
-          )
-          console.log(`[Claude] Commercialization risk: ${result.commercializationRisk.riskLevel}`)
-        }
-
-        // 3. Assess source credibility (log for now)
-        if (result.sources?.length > 0) {
-          const credibilities = result.sources.map(assessSourceCredibility)
-          const highCredCount = credibilities.filter(c => c.credibility === 'HIGH').length
-          console.log(`[Claude] Sources: ${result.sources.length} total, ${highCredCount} high credibility`)
-        }
-
-        console.log(`[Claude] Research complete. Brand safety score: ${result.brandSafetyScore}`)
-        return result
-      } catch (parseError) {
-        console.error('[Claude] JSON parse error:', parseError)
-        return getDefaultResearchResult(fullName, category)
-      }
-
-    } catch (error: unknown) {
-      lastError = error as Error
-      const errorMessage = lastError?.message || ''
-
-      // Check if rate limit error (429)
-      if (errorMessage.includes('rate_limit') || errorMessage.includes('429')) {
-        const waitTime = attempt * 30 // 30s, 60s, 90s
-        console.log(`[Claude] Rate limit hit. Waiting ${waitTime}s before retry...`)
-        await new Promise(resolve => setTimeout(resolve, waitTime * 1000))
-        continue
-      }
-
-      // For other errors, don't retry
-      console.error('[Claude] API error:', error)
-      throw error
+      rawResult = JSON.parse(jsonMatch[0])
     }
-  }
 
-  // All retries failed, return default
-  console.error('[Claude] All retries failed, using default research result')
-  return getDefaultResearchResult(fullName, category)
+    // Merge with defaults so missing fields never break downstream code
+    const defaults = getDefaultResearchResult(fullName, category)
+    let result = {
+      ...defaults,
+      ...(cleanObjectFromCitations(rawResult) as Partial<WebResearchResult>),
+      researchUnavailable: false,
+    } as WebResearchResult
+
+    // POST-PROCESSING: Enhance result with classification logic
+
+    // 0. Filter out old events and news
+    result = filterOldContent(result)
+    console.log(`[Claude] After filtering: ${result.upcomingEvents?.events?.length || 0} events, ${result.recentNews?.headlines?.length || 0} news`)
+
+    // 1. Re-classify controversy severities based on keywords
+    if (result.controversies?.items) {
+      result.controversies.items = result.controversies.items.map(item => ({
+        ...item,
+        severity: classifyControversySeverity(item.description)
+      }))
+    }
+
+    // 2. Calculate commercialization risk
+    if (result.brandPartnerships?.partnerships) {
+      const totalPosts = postCaptions?.length || 12
+      result.commercializationRisk = calculateCommercializationRisk(
+        result.brandPartnerships.partnerships,
+        totalPosts
+      )
+      console.log(`[Claude] Commercialization risk: ${result.commercializationRisk.riskLevel}`)
+    }
+
+    // 3. Assess source credibility (log for now)
+    if (result.sources?.length > 0) {
+      const credibilities = result.sources.map(assessSourceCredibility)
+      const highCredCount = credibilities.filter(c => c.credibility === 'HIGH').length
+      console.log(`[Claude] Sources: ${result.sources.length} total, ${highCredCount} high credibility`)
+    }
+
+    console.log(`[Claude] Research complete. Brand safety score: ${result.brandSafetyScore}`)
+    return result
+
+  } catch (error) {
+    // SDK už retryol 429/5xx (maxRetries: 4) — ak sme tu, research reálne zlyhal.
+    // Vraciame default s researchUnavailable: true, report zobrazí varovanie.
+    console.error('[Claude] Web research failed, returning UNVERIFIED defaults:', error)
+    return getDefaultResearchResult(fullName, category)
+  }
 }
 
 /**
@@ -816,7 +802,7 @@ export async function generateReportText(
 - Nadchádzajúce eventy: ${eventsInfo}
 - Aktuálne správy: ${newsInfo}
 - Kontroverzie: ${research.controversies?.found ? research.controversies.items?.map(i => i.description).join(', ') : 'Žiadne'}
-- Brand Safety Score: ${research.brandSafetyScore}/10
+- Brand Safety Score: ${research.brandSafetyScore}/10${research.researchUnavailable ? ' (⚠ NEPREVERENÉ - research zlyhal, v textoch to spomeň!)' : ''}
 
 **Metriky:**
 - Final Score: ${metrics.finalScore}/10
@@ -825,44 +811,64 @@ export async function generateReportText(
 - Ponúkaná cena: ${metrics.offeredPrice} CZK
 - Market value: ${metrics.marketValueHigh} CZK
 
-VYGENERUJ TIETO TEXTY (JSON formát):
-{
-  "heroSubtitle": "krátky popis pod menom (max 60 znakov, napr. '@handle | Víťaz Love Island 2024')",
-  "bioSummary": "2-3 vety sumarizujúce kto je tento influencer, jeho achievements, TV show",
-  "mediaHighlights": "1-2 vety o mediálnych vystúpeniach ak existujú, inak null",
-  "controversyContext": "ak existuje kontroverzia, napíš krátky kontext pre warning box, inak null",
-  "upcomingEventsText": "ak má nadchádzajúce eventy, napíš o nich, inak null",
-  "recommendationText": "2-3 vety s konkrétnym odporúčaním a podmienkami",
-  "verdictText": "krátky verdict text (napr. 'STRONG BUY – vynikajúca hodnota')"
-}
+VYGENERUJ TIETO TEXTY:
+- heroSubtitle: krátky popis pod menom (max 60 znakov, napr. '@handle | Víťaz Love Island 2024')
+- bioSummary: 2-3 vety sumarizujúce kto je tento influencer, jeho achievements, TV show
+- mediaHighlights: 1-2 vety o mediálnych vystúpeniach ak existujú, inak prázdny string
+- controversyContext: ak existuje kontroverzia, krátky kontext pre warning box, inak prázdny string
+- upcomingEventsText: ak má nadchádzajúce eventy, napíš o nich, inak prázdny string
+- recommendationText: 2-3 vety s konkrétnym odporúčaním a podmienkami
+- verdictText: krátky verdict text (napr. 'STRONG BUY – vynikajúca hodnota')
 
-Píš profesionálně, stručně, v češtině. Pokud nemáš info, dej null.`
+Píš profesionálně, stručně, v češtině. Pokud nemáš info, dej prázdný string.`
 
   try {
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
+      model: TEXT_MODEL,
+      max_tokens: 2000,
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema: {
+            type: 'object',
+            properties: {
+              heroSubtitle: { type: 'string' },
+              bioSummary: { type: 'string' },
+              mediaHighlights: { type: 'string' },
+              controversyContext: { type: 'string' },
+              upcomingEventsText: { type: 'string' },
+              recommendationText: { type: 'string' },
+              verdictText: { type: 'string' },
+            },
+            required: [
+              'heroSubtitle', 'bioSummary', 'mediaHighlights', 'controversyContext',
+              'upcomingEventsText', 'recommendationText', 'verdictText',
+            ],
+            additionalProperties: false,
+          },
         },
-      ],
-    })
+      },
+      messages: [{ role: 'user', content: prompt }],
+    } as Anthropic.MessageCreateParamsNonStreaming)
 
-    let textContent = ''
-    for (const block of response.content) {
-      if (block.type === 'text') {
-        textContent += block.text
-      }
-    }
-
-    const jsonMatch = textContent.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
+    const text = response.content.find(
+      (b): b is Anthropic.TextBlock => b.type === 'text'
+    )?.text
+    if (!text) {
       return getDefaultReportText(profile, metrics)
     }
 
-    return JSON.parse(jsonMatch[0]) as ReportTextContent
+    const parsed = JSON.parse(text) as ReportTextContent
+    // Empty strings → undefined (PDF renders sections conditionally)
+    return {
+      heroSubtitle: parsed.heroSubtitle,
+      bioSummary: parsed.bioSummary,
+      mediaHighlights: parsed.mediaHighlights || undefined,
+      controversyContext: parsed.controversyContext || undefined,
+      upcomingEventsText: parsed.upcomingEventsText || undefined,
+      recommendationText: parsed.recommendationText,
+      verdictText: parsed.verdictText,
+    }
 
   } catch (error) {
     console.error('[Claude] Generate text error:', error)
@@ -871,7 +877,9 @@ Píš profesionálně, stručně, v češtině. Pokud nemáš info, dej null.`
 }
 
 /**
- * Default research result if API fails
+ * Default research result if API fails.
+ * researchUnavailable: true → report zobrazí výrazné varovanie, že brand safety
+ * NIE JE preverená (predtým sa tichý default tváril ako čistý profil).
  */
 function getDefaultResearchResult(fullName: string, category: string): WebResearchResult {
   const brandMapping: Record<string, { suitable: string[], unsuitable: string[] }> = {
@@ -927,10 +935,11 @@ function getDefaultResearchResult(fullName: string, category: string): WebResear
     },
     currentBehavior: 'NEUTRAL',
     mediaPresentation: 'NEUTRAL',
-    brandSafetyScore: 7.5,
+    brandSafetyScore: 5, // neutrálne, NIE optimistických 7.5 — nič nebolo overené
     suitableBrands: brands.suitable,
     unsuitableBrands: brands.unsuitable,
     sources: [],
+    researchUnavailable: true,
   }
 }
 
@@ -952,8 +961,6 @@ function getDefaultReportText(
 // ============================================
 // DISCOVERY TOOL - Parameter Extraction
 // ============================================
-
-import { DiscoveryParameters } from './types'
 
 // Hashtag suggestions by category and country
 const HASHTAG_CONFIG: Record<string, Record<string, string[]>> = {
@@ -1042,7 +1049,6 @@ KRITICKÉ PRAVIDLÁ PRE HASHTAGS:
 - Mix: 50% lokálne (v jazyku krajiny), 50% medzinárodné (anglicky)
 - Bez # znaku
 - Premýšľaj: "Aké hashtagy by TENTO TYP influencera používal vo svojich postoch?"
-- Zahrň: niche hashtags, community hashtags, lokálne hashtags
 
 PRÍKLADY HASHTAGOV PODĽA NICHE:
 - Travel žena CZ: cestovatelka, travelgirl, cestujemeczech, wanderlust, travelbloggercz, cestovani, dovolena, exploremore
@@ -1051,78 +1057,53 @@ PRÍKLADY HASHTAGOV PODĽA NICHE:
 
 PRAVIDLÁ PRE FOLLOWERS:
 - Ak je uvedené presné číslo (napr. "30-50k"), použi ho presne
-- "mikro" = 5000-50000
-- "malý" = 10000-50000
-- "stredný" = 50000-200000
-- "veľký" = 200000+
+- "mikro" = 5000-50000, "malý" = 10000-50000, "stredný" = 50000-200000, "veľký" = 200000+
 
 PRAVIDLÁ PRE POHLAVIE:
-- "influencerka/blogerka" = female
-- "influencer/bloger" = male
-- Neuvedené = any
+- "influencerka/blogerka" = female, "influencer/bloger" = male, neuvedené = any
 
-KATEGÓRIE: Sport, Lifestyle, Beauty & Fashion, Tech & Gaming, Food & Gastro, Travel, Fitness & Health, Entertainment, Business & Finance, Family & Parenting
-
-VRÁŤ VÝHRADNE TENTO JSON (žiadny iný text!):
-{
-  "hashtags": ["hashtag1", "hashtag2", "hashtag3", "hashtag4", "hashtag5", "hashtag6", "hashtag7", "hashtag8"],
-  "category": "kategória",
-  "followersMin": 30000,
-  "followersMax": 50000,
-  "keywords": ["kľúčové", "slová"],
-  "contentType": "lifestyle",
-  "targetGender": "female"
-}
-
-PRÍKLAD:
-Popis: "Hľadám českou travel influencerku s 30-50k followers pre spoluprácu s kufrovým brandom"
-Výstup:
-{
-  "hashtags": ["cestovatelka", "travelgirl", "travelbloggercz", "cestujemeczech", "wanderlust", "cestovani", "dovolena", "travelczech", "exploretheworld", "cestovanislaskou"],
-  "category": "Travel",
-  "followersMin": 30000,
-  "followersMax": 50000,
-  "keywords": ["travel", "kufry", "cestování", "žena"],
-  "contentType": "lifestyle",
-  "targetGender": "female"
-}`
+KATEGÓRIE: Sport, Lifestyle, Beauty & Fashion, Tech & Gaming, Food & Gastro, Travel, Fitness & Health, Entertainment, Business & Finance, Family & Parenting`
 
   try {
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 800,  // Increased for more hashtags
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
+      model: DISCOVERY_MODEL,
+      max_tokens: 1500,
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema: {
+            type: 'object',
+            properties: {
+              hashtags: { type: 'array', items: { type: 'string' } },
+              category: { type: 'string' },
+              followersMin: { type: 'integer' },
+              followersMax: { type: 'integer' },
+              keywords: { type: 'array', items: { type: 'string' } },
+              contentType: { type: 'string' },
+              targetGender: { type: 'string', enum: ['male', 'female', 'any'] },
+            },
+            required: ['hashtags', 'category', 'followersMin', 'followersMax', 'keywords', 'contentType', 'targetGender'],
+            additionalProperties: false,
+          },
         },
-      ],
-    })
+      },
+      messages: [{ role: 'user', content: prompt }],
+    } as Anthropic.MessageCreateParamsNonStreaming)
 
-    let textContent = ''
-    for (const block of response.content) {
-      if (block.type === 'text') {
-        textContent += block.text
-      }
-    }
-
-    console.log('[Claude Discovery] Raw response:', textContent.substring(0, 300))
-
-    // Parse JSON from response
-    const jsonMatch = textContent.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      console.error('[Claude Discovery] Could not find JSON in response')
+    const text = response.content.find(
+      (b): b is Anthropic.TextBlock => b.type === 'text'
+    )?.text
+    if (!text) {
+      console.error('[Claude Discovery] Empty response')
       return getDefaultDiscoveryParameters(query, country)
     }
 
-    const result = JSON.parse(jsonMatch[0]) as DiscoveryParameters
+    const result = JSON.parse(text) as DiscoveryParameters
 
     // Validate and fix hashtags if needed
     if (!result.hashtags || result.hashtags.length === 0) {
       result.hashtags = getDefaultHashtags(result.category, country)
     }
-
-    // Ensure hashtags don't have # prefix
     result.hashtags = result.hashtags.map(h => h.replace(/^#/, ''))
 
     console.log(`[Claude Discovery] Extracted: ${result.hashtags.length} hashtags, category: ${result.category}, followers: ${result.followersMin}-${result.followersMax}`)

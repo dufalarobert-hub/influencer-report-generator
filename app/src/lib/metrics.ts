@@ -22,8 +22,10 @@ const BENCHMARKS = {
   STORY_PRODUCTION_BASE: 1500,   // CZK za story (base)
 
   // Influencer premiums
-  TRUST_PREMIUM: 1.3,         // 30% premium za dôveru vs reklama
-  WARM_AUDIENCE_PREMIUM: 1.5, // 50% premium za warm audience vs cold
+  // v5.1: premie znížené — kvalita publika je už zohľadnená v dynamickom CPM
+  // (ER multiplier), takže vyššia prémia by ju počítala dvakrát
+  TRUST_PREMIUM: 1.3,          // 30% premium za dôveru vs reklama (len engagement)
+  WARM_AUDIENCE_PREMIUM: 1.25, // 25% premium za warm audience vs cold
 
   // Defaults
   DEFAULT_REELS_PER_MONTH: 2,
@@ -598,9 +600,13 @@ export function calculateValueBreakdown(
   const contentExplanation = contentParts.join(' + ')
 
   // TOTAL VALUES (avg, min, max)
-  const totalValue = reachValue + engagementValue + contentValue
-  const totalValueMin = reachValueMin + engagementValue + contentValue
-  const totalValueMax = reachValueMax + engagementValue + contentValue
+  // v5.1: Reach a Engagement value sa PREKRÝVAJÚ — keď kupuješ impressions cez
+  // Meta Ads, engagement dostávaš v cene. Sčítanie oboch by tú istú mediálnu
+  // hodnotu počítalo dvakrát a systematicky tlačilo score k BUY.
+  // Mediálna hodnota = max(reach, engagement); content (produkcia) je navyše.
+  const totalValue = Math.max(reachValue, engagementValue) + contentValue
+  const totalValueMin = Math.max(reachValueMin, engagementValue) + contentValue
+  const totalValueMax = Math.max(reachValueMax, engagementValue) + contentValue
 
   return {
     reachValue,
@@ -696,10 +702,12 @@ export function calculateROI(
 
 /**
  * Calculate final score (1-10)
+ * v5.1: engagementScore sa odvíja od size-adjusted ER ratingu (erBenchmark),
+ * nie od absolútneho ER — 1M účet s 2% ER je GOOD, nano účet s 2% je POOR.
  */
 export function calculateScore(
   valueRatio: number,
-  engagementRate: number,
+  erRating: ERBenchmark['rating'],
   reachMultiplier: number,
   brandSafetyScore: number = 7.0
 ): ScoreBreakdown {
@@ -715,16 +723,15 @@ export function calculateScore(
   else if (valueRatio >= 0.8) priceScore = 4
   else priceScore = 3
 
-  // Engagement Score (25%) - engagement rate quality
-  // ER benchmarks: <1% poor, 1-3% average, 3-6% good, >6% excellent
-  let engagementScore: number
-  if (engagementRate >= 8) engagementScore = 10
-  else if (engagementRate >= 6) engagementScore = 9
-  else if (engagementRate >= 4) engagementScore = 8
-  else if (engagementRate >= 3) engagementScore = 7
-  else if (engagementRate >= 2) engagementScore = 6
-  else if (engagementRate >= 1) engagementScore = 5
-  else engagementScore = 3
+  // Engagement Score (25%) - size-adjusted ER rating from benchmark
+  const engagementScores: Record<ERBenchmark['rating'], number> = {
+    'EXCELLENT': 10,
+    'GOOD': 8,
+    'AVERAGE': 6,
+    'BELOW_AVERAGE': 4,
+    'POOR': 2,
+  }
+  const engagementScore = engagementScores[erRating]
 
   // Reach Score (20%) - viral potential
   let reachScore: number
@@ -787,27 +794,19 @@ export function calculateAllMetrics(
     ? Math.max(...videoPosts.map(p => p.videoViewCount || 0))
     : 0
 
-  // Use MEDIAN values when high variance is detected (more accurate for outlier profiles)
-  const useMedian = profile.hasHighVariance === true
-  const avgReelViews = useMedian && profile.medianVideoViews
-    ? profile.medianVideoViews
-    : (profile.avgVideoViews || 0)
-  const avgLikes = useMedian && profile.medianLikes
-    ? profile.medianLikes
-    : (profile.avgLikes || 0)
-  const avgComments = useMedian && profile.medianComments
-    ? profile.medianComments
-    : (profile.avgComments || 0)
-  const reachMultiplier = useMedian && profile.medianReachMultiplier
-    ? profile.medianReachMultiplier
-    : (profile.reachMultiplier || 0)
-  const engagementRate = useMedian && profile.medianEngagementRate
-    ? profile.medianEngagementRate
-    : (profile.engagementRate || 0)
+  // v5.1: Pre ROI kalkulácie používame VŽDY medián (ak je k dispozícii).
+  // Predtým sa medián zapínal len pri hasHighVariance (avg/median > 2), čo
+  // vytváralo cliff effect na hranici — profil s ratiom 1.9 dostal optimistický
+  // priemer, profil s 2.1 medián. Medián je robustný vždy; priemer zostáva
+  // v reporte ako informatívna hodnota.
+  const avgReelViews = profile.medianVideoViews || profile.avgVideoViews || 0
+  const avgLikes = profile.medianLikes || profile.avgLikes || 0
+  const avgComments = profile.medianComments || profile.avgComments || 0
+  const reachMultiplier = profile.medianReachMultiplier || profile.reachMultiplier || 0
+  const engagementRate = profile.medianEngagementRate || profile.engagementRate || 0
 
-  if (useMedian) {
-    console.log(`[Metrics] ⚠ High variance detected - using MEDIAN values for calculations`)
-    console.log(`[Metrics]   ER: ${profile.engagementRate}% (avg) → ${engagementRate}% (median)`)
+  if (profile.hasHighVariance) {
+    console.log(`[Metrics] ⚠ High variance detected (avg ER ${profile.engagementRate}% vs median ${engagementRate}%)`)
   }
 
   // Calculate ER benchmark first (needed for dynamic values)
@@ -857,10 +856,10 @@ export function calculateAllMetrics(
   // NEW: Viral potential scoring
   const viralPotential = calculateViralPotential(profile.latestPosts)
 
-  // Score based on value ratio
+  // Score based on value ratio (engagement via size-adjusted benchmark rating)
   const score = calculateScore(
     roi.valueBreakdown.valueRatio,
-    engagementRate,
+    erBenchmark.rating,
     reachMultiplier,
     brandSafetyScore
   )
@@ -1135,12 +1134,14 @@ export function calculateViralPotential(
 function getRecommendedCTRByER(
   erRating: 'POOR' | 'BELOW_AVERAGE' | 'AVERAGE' | 'GOOD' | 'EXCELLENT'
 ): { min: number; max: number; recommended: number } {
+  // v5.1: CTR znížené na realistické IG hodnoty. Reels nemajú klikateľný link —
+  // klik ide cez stories sticker / bio, takže CTR z views býva 0.3-2%, nie 1-3%.
   const ctrRanges: Record<string, { min: number; max: number; recommended: number }> = {
-    'EXCELLENT': { min: 2.5, max: 3.5, recommended: 3 },
-    'GOOD': { min: 1.5, max: 2.5, recommended: 2 },
-    'AVERAGE': { min: 1.0, max: 2.0, recommended: 1.5 },
-    'BELOW_AVERAGE': { min: 0.5, max: 1.5, recommended: 1 },
-    'POOR': { min: 0.5, max: 1.0, recommended: 0.5 },
+    'EXCELLENT': { min: 1.0, max: 2.0, recommended: 2 },
+    'GOOD': { min: 0.8, max: 1.5, recommended: 1 },
+    'AVERAGE': { min: 0.5, max: 1.0, recommended: 1 },
+    'BELOW_AVERAGE': { min: 0.3, max: 0.8, recommended: 0.5 },
+    'POOR': { min: 0.2, max: 0.5, recommended: 0.5 },
   }
   return ctrRanges[erRating] || ctrRanges['AVERAGE']
 }
@@ -1155,8 +1156,8 @@ export function calculateConversionPrediction(
   totalCost?: number,
   erRating: 'POOR' | 'BELOW_AVERAGE' | 'AVERAGE' | 'GOOD' | 'EXCELLENT' = 'AVERAGE'
 ): ConversionPrediction {
-  // CTR options for matrix (1%, 2%, 3%)
-  const ctrOptions = [1, 2, 3]
+  // CTR options for matrix — v5.1: realistické IG hodnoty (0.5%, 1%, 2%)
+  const ctrOptions = [0.5, 1, 2]
   // CR options for matrix (1%, 2%, 3%)
   const crOptions = [1, 2, 3]
 

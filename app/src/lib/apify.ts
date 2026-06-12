@@ -1,8 +1,15 @@
 /**
  * Apify Service - Instagram Data Fetching
  *
- * Používa priame HTTP volanie na Apify API (bez SDK kvôli webpack issues)
+ * Používa priame HTTP volanie na Apify API (bez SDK kvôli webpack issues).
+ * v5.1: jednotný runApifyActor() helper (start → poll → dataset) + disková
+ * cache s7-dňovou TTL (opakovaný report = $0 a okamžite).
  */
+
+import { createHash } from 'crypto'
+import { promises as fs } from 'fs'
+import path from 'path'
+import { LOOKALIKE_CONFIG } from './types'
 
 // Types
 export interface InstagramPost {
@@ -57,6 +64,128 @@ const APIFY_API_BASE = 'https://api.apify.com/v2'
 // Maximum age of posts to include in metric calculations (in months)
 const MAX_POST_AGE_MONTHS = 6
 
+// ============================================
+// APIFY ACTOR RUNNER + DISK CACHE
+// ============================================
+
+const CACHE_DIR = path.join(process.cwd(), '.cache', 'apify')
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+
+async function readCache(key: string): Promise<unknown[] | null> {
+  try {
+    const file = path.join(CACHE_DIR, `${key}.json`)
+    const stat = await fs.stat(file)
+    if (Date.now() - stat.mtimeMs > CACHE_TTL_MS) return null
+    return JSON.parse(await fs.readFile(file, 'utf-8'))
+  } catch {
+    return null
+  }
+}
+
+async function writeCache(key: string, items: unknown[]): Promise<void> {
+  try {
+    await fs.mkdir(CACHE_DIR, { recursive: true })
+    await fs.writeFile(path.join(CACHE_DIR, `${key}.json`), JSON.stringify(items))
+  } catch (e) {
+    console.warn('[Apify Cache] Write failed:', e)
+  }
+}
+
+interface RunActorOptions {
+  label?: string
+  maxAttempts?: number  // poll attempts, 2s each (default 90 = 3 min)
+  cache?: boolean       // default true; disable globally with APIFY_CACHE=off
+}
+
+/**
+ * Run an Apify actor and return its dataset items.
+ * Handles: start run → poll status → fetch dataset → 7-day disk cache.
+ */
+async function runApifyActor(
+  actorId: string,
+  input: Record<string, unknown>,
+  opts: RunActorOptions = {}
+): Promise<unknown[]> {
+  const apiToken = process.env.APIFY_API_TOKEN
+  if (!apiToken) {
+    throw new Error('APIFY_API_TOKEN is not configured')
+  }
+
+  const { label = actorId, maxAttempts = 90, cache = true } = opts
+  const useCache = cache && process.env.APIFY_CACHE !== 'off'
+  const cacheKey = createHash('sha256')
+    .update(`${actorId}:${JSON.stringify(input)}`)
+    .digest('hex')
+    .slice(0, 32)
+
+  if (useCache) {
+    const cached = await readCache(cacheKey)
+    if (cached) {
+      console.log(`[${label}] ✓ Cache hit (${cached.length} items, TTL 7 dní)`)
+      return cached
+    }
+  }
+
+  const runResponse = await fetch(
+    `${APIFY_API_BASE}/acts/${actorId}/runs?token=${apiToken}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }
+  )
+
+  if (!runResponse.ok) {
+    throw new Error(`[${label}] Failed to start actor: ${await runResponse.text()}`)
+  }
+
+  const runData = await runResponse.json()
+  const runId = runData.data.id
+  console.log(`[${label}] Actor started, run ID: ${runId}`)
+
+  let status = 'RUNNING'
+  let attempts = 0
+  while (status === 'RUNNING' || status === 'READY') {
+    await new Promise(resolve => setTimeout(resolve, 2000))
+    const statusResponse = await fetch(
+      `${APIFY_API_BASE}/actor-runs/${runId}?token=${apiToken}`
+    )
+    const statusData = await statusResponse.json()
+    status = statusData.data.status
+
+    attempts++
+    if (attempts >= maxAttempts) {
+      throw new Error(`[${label}] Timeout after ${maxAttempts * 2}s`)
+    }
+    if (attempts % 10 === 0) {
+      console.log(`[${label}] Still running... (${attempts * 2}s)`)
+    }
+  }
+
+  if (status !== 'SUCCEEDED') {
+    throw new Error(`[${label}] Actor failed with status: ${status}`)
+  }
+
+  const datasetResponse = await fetch(
+    `${APIFY_API_BASE}/datasets/${runData.data.defaultDatasetId}/items?token=${apiToken}`
+  )
+  if (!datasetResponse.ok) {
+    throw new Error(`[${label}] Failed to fetch dataset`)
+  }
+
+  const items: unknown[] = await datasetResponse.json()
+
+  if (useCache && items.length > 0) {
+    await writeCache(cacheKey, items)
+  }
+
+  return items
+}
+
+// ============================================
+// STATISTICS HELPERS
+// ============================================
+
 /**
  * Calculate median of an array of numbers
  * More robust against outliers than average
@@ -104,233 +233,157 @@ function isPostRecent(post: InstagramPost, maxAgeMonths: number = MAX_POST_AGE_M
   return postDate >= cutoffDate
 }
 
+// ============================================
+// INSTAGRAM PROFILE SCRAPER
+// ============================================
+
 /**
- * Fetch Instagram profile data using Apify REST API
+ * Fetch Instagram profile data using Apify Profile Scraper
  */
 export async function fetchInstagramData(username: string): Promise<InstagramProfile> {
-  const apiToken = process.env.APIFY_API_TOKEN
-
-  if (!apiToken) {
-    throw new Error('APIFY_API_TOKEN is not configured')
-  }
-
   const cleanUsername = username.replace('@', '').trim()
   console.log(`[Apify] Fetching data for @${cleanUsername}...`)
 
-  try {
-    // Start the actor run
-    const runResponse = await fetch(
-      `${APIFY_API_BASE}/acts/apify~instagram-profile-scraper/runs?token=${apiToken}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          usernames: [cleanUsername],
-        }),
-      }
-    )
+  const items = await runApifyActor(
+    'apify~instagram-profile-scraper',
+    { usernames: [cleanUsername] },
+    { label: 'Apify Profile' }
+  )
 
-    if (!runResponse.ok) {
-      const error = await runResponse.text()
-      throw new Error(`Failed to start Apify actor: ${error}`)
-    }
-
-    const runData = await runResponse.json()
-    const runId = runData.data.id
-
-    console.log(`[Apify] Actor started, run ID: ${runId}`)
-
-    // Poll for completion
-    let status = 'RUNNING'
-    let attempts = 0
-    const maxAttempts = 90 // 3 minutes max
-
-    while (status === 'RUNNING' || status === 'READY') {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-
-      const statusResponse = await fetch(
-        `${APIFY_API_BASE}/actor-runs/${runId}?token=${apiToken}`
-      )
-      const statusData = await statusResponse.json()
-      status = statusData.data.status
-
-      attempts++
-      if (attempts >= maxAttempts) {
-        throw new Error('Timeout waiting for Apify actor to complete')
-      }
-
-      if (attempts % 5 === 0) {
-        console.log(`[Apify] Still running... (${attempts * 2}s)`)
-      }
-    }
-
-    if (status !== 'SUCCEEDED') {
-      throw new Error(`Apify actor failed with status: ${status}`)
-    }
-
-    // Get dataset ID from run
-    const datasetId = runData.data.defaultDatasetId
-
-    // Fetch results from dataset
-    const datasetResponse = await fetch(
-      `${APIFY_API_BASE}/datasets/${datasetId}/items?token=${apiToken}`
-    )
-
-    if (!datasetResponse.ok) {
-      throw new Error('Failed to fetch dataset')
-    }
-
-    const items = await datasetResponse.json()
-
-    if (!items || items.length === 0) {
-      throw new Error(`No data found for @${cleanUsername}`)
-    }
-
-    const raw = items[0]
-
-    // Parse latest posts (increased to 20 for more reels data)
-    const latestPosts: InstagramPost[] = (raw.latestPosts || [])
-      .slice(0, 20)
-      .map((p: Record<string, unknown>) => ({
-        id: p.id as string,
-        type: p.type as 'Video' | 'Image' | 'Sidecar',
-        shortCode: p.shortCode as string,
-        caption: (p.caption as string) || '',
-        url: p.url as string,
-        likesCount: (p.likesCount as number) || 0,
-        commentsCount: (p.commentsCount as number) || 0,
-        videoViewCount: p.videoViewCount as number | undefined,
-        timestamp: p.timestamp as string,
-        locationName: p.locationName as string | undefined,
-      }))
-
-    // Filter out old pinned posts (older than 6 months) for metric calculations
-    const recentPosts = latestPosts.filter(p => isPostRecent(p))
-    const filteredOutCount = latestPosts.length - recentPosts.length
-
-    if (filteredOutCount > 0) {
-      console.log(`[Apify] ⚠ Filtered out ${filteredOutCount} old posts (>6 months) from metric calculations`)
-      // Log which posts were filtered
-      const oldPosts = latestPosts.filter(p => !isPostRecent(p))
-      oldPosts.forEach(p => {
-        const postDate = new Date(p.timestamp).toLocaleDateString('cs-CZ')
-        const engagement = p.videoViewCount
-          ? `${(p.videoViewCount / 1000).toFixed(0)}K views`
-          : `${p.likesCount} likes`
-        console.log(`[Apify]   - Filtered: ${postDate} (${engagement})`)
-      })
-    }
-
-    // Calculate averages AND medians from RECENT posts only
-    const postsWithEngagement = recentPosts.filter(p => p.likesCount > 0)
-    // Fixed: Filter by videoViewCount only - Apify may return Reels as different types (Video, Reel, Clip, GraphVideo)
-    const videoPosts = recentPosts.filter(p => p.videoViewCount && p.videoViewCount > 0)
-
-    // AVERAGE (mean) calculations
-    const avgLikes = postsWithEngagement.length > 0
-      ? Math.round(postsWithEngagement.reduce((sum, p) => sum + p.likesCount, 0) / postsWithEngagement.length)
-      : 0
-
-    const avgComments = postsWithEngagement.length > 0
-      ? Math.round(postsWithEngagement.reduce((sum, p) => sum + p.commentsCount, 0) / postsWithEngagement.length)
-      : 0
-
-    const avgVideoViews = videoPosts.length > 0
-      ? Math.round(videoPosts.reduce((sum, p) => sum + (p.videoViewCount || 0), 0) / videoPosts.length)
-      : 0
-
-    // MEDIAN calculations (more robust against outliers)
-    const medianLikes = calculateMedian(postsWithEngagement.map(p => p.likesCount))
-    const medianComments = calculateMedian(postsWithEngagement.map(p => p.commentsCount))
-    const medianVideoViews = calculateMedian(videoPosts.map(p => p.videoViewCount || 0))
-
-    // TRIMMED MEAN calculations (10% cut from both ends - compromise)
-    const trimmedMeanLikes = calculateTrimmedMean(postsWithEngagement.map(p => p.likesCount))
-    const trimmedMeanComments = calculateTrimmedMean(postsWithEngagement.map(p => p.commentsCount))
-    const trimmedMeanVideoViews = calculateTrimmedMean(videoPosts.map(p => p.videoViewCount || 0))
-
-    const followersCount = raw.followersCount || 0
-
-    // Calculate ER for EACH POST first, then average/median/trimmed mean
-    // This is the correct way - average the ERs, not average likes then calculate ER
-    const postERs = followersCount > 0
-      ? postsWithEngagement.map(p => ((p.likesCount + p.commentsCount) / followersCount) * 100)
-      : []
-
-    // Engagement rates (calculated correctly from per-post ERs)
-    const engagementRate = postERs.length > 0
-      ? postERs.reduce((sum, er) => sum + er, 0) / postERs.length
-      : 0
-
-    const medianEngagementRate = postERs.length > 0
-      ? calculateMedian(postERs.map(er => Math.round(er * 100))) / 100  // Convert to preserve decimals
-      : 0
-
-    const trimmedMeanEngagementRate = postERs.length > 0
-      ? calculateTrimmedMean(postERs.map(er => Math.round(er * 100))) / 100
-      : 0
-
-    // Reach multipliers
-    const reachMultiplier = followersCount > 0 && avgVideoViews > 0
-      ? avgVideoViews / followersCount
-      : 0
-
-    const medianReachMultiplier = followersCount > 0 && medianVideoViews > 0
-      ? medianVideoViews / followersCount
-      : 0
-
-    // Detect high variance (outliers present)
-    // If average ER is more than 2x the median ER, there are significant outliers
-    const hasHighVariance = engagementRate > 0 && medianEngagementRate > 0 && (engagementRate / medianEngagementRate) > 2
-
-    if (hasHighVariance) {
-      console.log(`[Apify] ⚠ High variance detected! Avg ER: ${engagementRate.toFixed(2)}%, Median ER: ${medianEngagementRate.toFixed(2)}% (ratio: ${(engagementRate / medianEngagementRate).toFixed(1)}x)`)
-      console.log(`[Apify]   → Using MEDIAN for more accurate ROI calculations`)
-    }
-
-    const profile: InstagramProfile = {
-      username: raw.username,
-      fullName: raw.fullName || '',
-      biography: raw.biography || '',
-      followersCount,
-      followsCount: raw.followsCount || 0,
-      postsCount: raw.postsCount || 0,
-      verified: raw.verified || false,
-      profilePicUrl: raw.profilePicUrl || '',
-      profilePicUrlHD: raw.profilePicUrlHD || '',
-      isBusinessAccount: raw.isBusinessAccount || false,
-      businessCategoryName: raw.businessCategoryName,
-      latestPosts,
-      // Average values
-      avgLikes,
-      avgComments,
-      avgVideoViews,
-      engagementRate: Math.round(engagementRate * 100) / 100,
-      reachMultiplier: Math.round(reachMultiplier * 100) / 100,
-      // Median values (more robust)
-      medianLikes,
-      medianComments,
-      medianVideoViews,
-      medianEngagementRate: Math.round(medianEngagementRate * 100) / 100,
-      medianReachMultiplier: Math.round(medianReachMultiplier * 100) / 100,
-      // Trimmed mean (10% orez - kompromis)
-      trimmedMeanLikes,
-      trimmedMeanComments,
-      trimmedMeanVideoViews,
-      trimmedMeanEngagementRate: Math.round(trimmedMeanEngagementRate * 100) / 100,
-      // Outlier detection
-      hasHighVariance,
-    }
-
-    console.log(`[Apify] Success! @${cleanUsername}: ${followersCount} followers, ${latestPosts.length} posts`)
-    console.log(`[Apify] ER: ${profile.engagementRate}% (avg) / ${profile.trimmedMeanEngagementRate}% (trimmed) / ${profile.medianEngagementRate}% (median)${hasHighVariance ? ' ⚠️ HIGH VARIANCE' : ''}`)
-
-    return profile
-
-  } catch (error) {
-    console.error('[Apify] Error:', error)
-    throw error
+  if (!items || items.length === 0) {
+    throw new Error(`No data found for @${cleanUsername}`)
   }
+
+  const raw = items[0] as Record<string, any>
+
+  // Parse latest posts (increased to 20 for more reels data)
+  const latestPosts: InstagramPost[] = (raw.latestPosts || [])
+    .slice(0, 20)
+    .map((p: Record<string, unknown>) => ({
+      id: p.id as string,
+      type: p.type as 'Video' | 'Image' | 'Sidecar',
+      shortCode: p.shortCode as string,
+      caption: (p.caption as string) || '',
+      url: p.url as string,
+      likesCount: (p.likesCount as number) || 0,
+      commentsCount: (p.commentsCount as number) || 0,
+      videoViewCount: p.videoViewCount as number | undefined,
+      timestamp: p.timestamp as string,
+      locationName: p.locationName as string | undefined,
+    }))
+
+  // Filter out old pinned posts (older than 6 months) for metric calculations
+  const recentPosts = latestPosts.filter(p => isPostRecent(p))
+  const filteredOutCount = latestPosts.length - recentPosts.length
+
+  if (filteredOutCount > 0) {
+    console.log(`[Apify] ⚠ Filtered out ${filteredOutCount} old posts (>6 months) from metric calculations`)
+    latestPosts.filter(p => !isPostRecent(p)).forEach(p => {
+      const postDate = new Date(p.timestamp).toLocaleDateString('cs-CZ')
+      const engagement = p.videoViewCount
+        ? `${(p.videoViewCount / 1000).toFixed(0)}K views`
+        : `${p.likesCount} likes`
+      console.log(`[Apify]   - Filtered: ${postDate} (${engagement})`)
+    })
+  }
+
+  // Calculate averages AND medians from RECENT posts only
+  const postsWithEngagement = recentPosts.filter(p => p.likesCount > 0)
+  // Filter by videoViewCount only - Apify may return Reels as different types (Video, Reel, Clip, GraphVideo)
+  const videoPosts = recentPosts.filter(p => p.videoViewCount && p.videoViewCount > 0)
+
+  // AVERAGE (mean) calculations
+  const avgLikes = postsWithEngagement.length > 0
+    ? Math.round(postsWithEngagement.reduce((sum, p) => sum + p.likesCount, 0) / postsWithEngagement.length)
+    : 0
+
+  const avgComments = postsWithEngagement.length > 0
+    ? Math.round(postsWithEngagement.reduce((sum, p) => sum + p.commentsCount, 0) / postsWithEngagement.length)
+    : 0
+
+  const avgVideoViews = videoPosts.length > 0
+    ? Math.round(videoPosts.reduce((sum, p) => sum + (p.videoViewCount || 0), 0) / videoPosts.length)
+    : 0
+
+  // MEDIAN calculations (more robust against outliers)
+  const medianLikes = calculateMedian(postsWithEngagement.map(p => p.likesCount))
+  const medianComments = calculateMedian(postsWithEngagement.map(p => p.commentsCount))
+  const medianVideoViews = calculateMedian(videoPosts.map(p => p.videoViewCount || 0))
+
+  // TRIMMED MEAN calculations (10% cut from both ends - compromise)
+  const trimmedMeanLikes = calculateTrimmedMean(postsWithEngagement.map(p => p.likesCount))
+  const trimmedMeanComments = calculateTrimmedMean(postsWithEngagement.map(p => p.commentsCount))
+  const trimmedMeanVideoViews = calculateTrimmedMean(videoPosts.map(p => p.videoViewCount || 0))
+
+  const followersCount = raw.followersCount || 0
+
+  // Calculate ER for EACH POST first, then average/median/trimmed mean
+  const postERs = followersCount > 0
+    ? postsWithEngagement.map(p => ((p.likesCount + p.commentsCount) / followersCount) * 100)
+    : []
+
+  const engagementRate = postERs.length > 0
+    ? postERs.reduce((sum, er) => sum + er, 0) / postERs.length
+    : 0
+
+  const medianEngagementRate = postERs.length > 0
+    ? calculateMedian(postERs.map(er => Math.round(er * 100))) / 100  // Convert to preserve decimals
+    : 0
+
+  const trimmedMeanEngagementRate = postERs.length > 0
+    ? calculateTrimmedMean(postERs.map(er => Math.round(er * 100))) / 100
+    : 0
+
+  // Reach multipliers
+  const reachMultiplier = followersCount > 0 && avgVideoViews > 0
+    ? avgVideoViews / followersCount
+    : 0
+
+  const medianReachMultiplier = followersCount > 0 && medianVideoViews > 0
+    ? medianVideoViews / followersCount
+    : 0
+
+  // Detect high variance (outliers present)
+  const hasHighVariance = engagementRate > 0 && medianEngagementRate > 0 && (engagementRate / medianEngagementRate) > 2
+
+  if (hasHighVariance) {
+    console.log(`[Apify] ⚠ High variance detected! Avg ER: ${engagementRate.toFixed(2)}%, Median ER: ${medianEngagementRate.toFixed(2)}%`)
+  }
+
+  const profile: InstagramProfile = {
+    username: raw.username,
+    fullName: raw.fullName || '',
+    biography: raw.biography || '',
+    followersCount,
+    followsCount: raw.followsCount || 0,
+    postsCount: raw.postsCount || 0,
+    verified: raw.verified || false,
+    profilePicUrl: raw.profilePicUrl || '',
+    profilePicUrlHD: raw.profilePicUrlHD || '',
+    isBusinessAccount: raw.isBusinessAccount || false,
+    businessCategoryName: raw.businessCategoryName,
+    latestPosts,
+    avgLikes,
+    avgComments,
+    avgVideoViews,
+    engagementRate: Math.round(engagementRate * 100) / 100,
+    reachMultiplier: Math.round(reachMultiplier * 100) / 100,
+    medianLikes,
+    medianComments,
+    medianVideoViews,
+    medianEngagementRate: Math.round(medianEngagementRate * 100) / 100,
+    medianReachMultiplier: Math.round(medianReachMultiplier * 100) / 100,
+    trimmedMeanLikes,
+    trimmedMeanComments,
+    trimmedMeanVideoViews,
+    trimmedMeanEngagementRate: Math.round(trimmedMeanEngagementRate * 100) / 100,
+    hasHighVariance,
+  }
+
+  console.log(`[Apify] Success! @${cleanUsername}: ${followersCount} followers, ${latestPosts.length} posts`)
+  console.log(`[Apify] ER: ${profile.engagementRate}% (avg) / ${profile.trimmedMeanEngagementRate}% (trimmed) / ${profile.medianEngagementRate}% (median)${hasHighVariance ? ' ⚠️ HIGH VARIANCE' : ''}`)
+
+  return profile
 }
 
 /**
@@ -349,7 +402,6 @@ export function getTopPosts(profile: InstagramProfile, count: number = 4): Insta
 export function getTopReels(profile: InstagramProfile, count: number = 8): InstagramPost[] {
   return profile.latestPosts
     .filter(p => isPostRecent(p))  // Exclude old pinned viral content
-    // Fixed: Filter by videoViewCount only - Apify may return Reels as different types
     .filter(p => p.videoViewCount && p.videoViewCount > 0)
     .sort((a, b) => (b.videoViewCount || 0) - (a.videoViewCount || 0))
     .slice(0, count)
@@ -368,204 +420,27 @@ interface ReelData {
 }
 
 /**
- * Fetch accurate video play counts using Instagram Reel Scraper
- * This returns videoPlayCount which is the actual view count shown on Instagram
- */
-export async function fetchReelViews(reelUrls: string[]): Promise<Map<string, number>> {
-  const apiToken = process.env.APIFY_API_TOKEN
-
-  if (!apiToken) {
-    throw new Error('APIFY_API_TOKEN is not configured')
-  }
-
-  if (reelUrls.length === 0) {
-    return new Map()
-  }
-
-  console.log(`[Apify Reels] Fetching accurate views for ${reelUrls.length} reels...`)
-
-  try {
-    // Start the Instagram Reel Scraper actor
-    // Convert /p/ URLs to /reel/ format
-    const formattedUrls = reelUrls.map(url => url.replace('/p/', '/reel/'))
-
-    console.log(`[Apify Reels] URLs: ${formattedUrls.slice(0, 3).join(', ')}...`)
-
-    const runResponse = await fetch(
-      `${APIFY_API_BASE}/acts/apify~instagram-reel-scraper/runs?token=${apiToken}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: formattedUrls,  // Can accept usernames OR direct reel URLs
-        }),
-      }
-    )
-
-    if (!runResponse.ok) {
-      const error = await runResponse.text()
-      console.error('[Apify Reels] Failed to start:', error)
-      return new Map()
-    }
-
-    const runData = await runResponse.json()
-    const runId = runData.data.id
-
-    console.log(`[Apify Reels] Actor started, run ID: ${runId}`)
-
-    // Poll for completion
-    let status = 'RUNNING'
-    let attempts = 0
-    const maxAttempts = 90 // 3 minutes max
-
-    while (status === 'RUNNING' || status === 'READY') {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-
-      const statusResponse = await fetch(
-        `${APIFY_API_BASE}/actor-runs/${runId}?token=${apiToken}`
-      )
-      const statusData = await statusResponse.json()
-      status = statusData.data.status
-
-      attempts++
-      if (attempts >= maxAttempts) {
-        console.error('[Apify Reels] Timeout')
-        return new Map()
-      }
-
-      if (attempts % 5 === 0) {
-        console.log(`[Apify Reels] Still running... (${attempts * 2}s)`)
-      }
-    }
-
-    if (status !== 'SUCCEEDED') {
-      console.error(`[Apify Reels] Failed with status: ${status}`)
-      return new Map()
-    }
-
-    // Get dataset ID from run
-    const datasetId = runData.data.defaultDatasetId
-
-    // Fetch results from dataset
-    const datasetResponse = await fetch(
-      `${APIFY_API_BASE}/datasets/${datasetId}/items?token=${apiToken}`
-    )
-
-    if (!datasetResponse.ok) {
-      console.error('[Apify Reels] Failed to fetch dataset')
-      return new Map()
-    }
-
-    const items: ReelData[] = await datasetResponse.json()
-
-    // Build map of shortCode -> videoPlayCount
-    const viewsMap = new Map<string, number>()
-    for (const item of items) {
-      if (item.shortCode && item.videoPlayCount) {
-        viewsMap.set(item.shortCode, item.videoPlayCount)
-        console.log(`[Apify Reels]   ${item.shortCode}: ${item.videoPlayCount.toLocaleString()} plays`)
-      }
-    }
-
-    console.log(`[Apify Reels] Success! Got accurate views for ${viewsMap.size} reels`)
-
-    return viewsMap
-
-  } catch (error) {
-    console.error('[Apify Reels] Error:', error)
-    return new Map()
-  }
-}
-
-/**
- * Fetch reels directly by username (gets accurate data from Reels tab)
+ * Fetch reels directly by username (gets accurate videoPlayCount from Reels tab)
  */
 export async function fetchReelsByUsername(username: string, limit: number = 15): Promise<Map<string, number>> {
-  const apiToken = process.env.APIFY_API_TOKEN
-
-  if (!apiToken) {
-    throw new Error('APIFY_API_TOKEN is not configured')
-  }
-
   console.log(`[Apify Reels] Fetching reels for @${username} (limit: ${limit})...`)
 
   try {
-    const runResponse = await fetch(
-      `${APIFY_API_BASE}/acts/apify~instagram-reel-scraper/runs?token=${apiToken}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: [username],
-          resultsLimit: limit,
-        }),
-      }
-    )
-
-    if (!runResponse.ok) {
-      const error = await runResponse.text()
-      console.error('[Apify Reels] Failed to start:', error)
-      return new Map()
-    }
-
-    const runData = await runResponse.json()
-    const runId = runData.data.id
-
-    console.log(`[Apify Reels] Actor started, run ID: ${runId}`)
-
-    // Poll for completion
-    let status = 'RUNNING'
-    let attempts = 0
-    const maxAttempts = 90 // 3 minutes max
-
-    while (status === 'RUNNING' || status === 'READY') {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-
-      const statusResponse = await fetch(
-        `${APIFY_API_BASE}/actor-runs/${runId}?token=${apiToken}`
-      )
-      const statusData = await statusResponse.json()
-      status = statusData.data.status
-
-      attempts++
-      if (attempts >= maxAttempts) {
-        console.error('[Apify Reels] Timeout')
-        return new Map()
-      }
-
-      if (attempts % 5 === 0) {
-        console.log(`[Apify Reels] Still running... (${attempts * 2}s)`)
-      }
-    }
-
-    if (status !== 'SUCCEEDED') {
-      console.error(`[Apify Reels] Failed with status: ${status}`)
-      return new Map()
-    }
-
-    const datasetId = runData.data.defaultDatasetId
-    const datasetResponse = await fetch(
-      `${APIFY_API_BASE}/datasets/${datasetId}/items?token=${apiToken}`
-    )
-
-    if (!datasetResponse.ok) {
-      console.error('[Apify Reels] Failed to fetch dataset')
-      return new Map()
-    }
-
-    const items: ReelData[] = await datasetResponse.json()
+    const items = await runApifyActor(
+      'apify~instagram-reel-scraper',
+      { username: [username], resultsLimit: limit },
+      { label: 'Apify Reels' }
+    ) as ReelData[]
 
     const viewsMap = new Map<string, number>()
     for (const item of items) {
       if (item.shortCode && item.videoPlayCount) {
         viewsMap.set(item.shortCode, item.videoPlayCount)
-        console.log(`[Apify Reels]   ${item.shortCode}: ${item.videoPlayCount.toLocaleString()} plays`)
       }
     }
 
     console.log(`[Apify Reels] Success! Got ${viewsMap.size} reels from @${username}`)
     return viewsMap
-
   } catch (error) {
     console.error('[Apify Reels] Error:', error)
     return new Map()
@@ -576,7 +451,6 @@ export async function fetchReelsByUsername(username: string, limit: number = 15)
  * Update profile posts with accurate video play counts from Reel Scraper
  */
 export async function enrichProfileWithReelViews(profile: InstagramProfile): Promise<InstagramProfile> {
-  // Fetch reels directly by username (more accurate than URL-based)
   const viewsMap = await fetchReelsByUsername(profile.username, 15)
 
   if (viewsMap.size === 0) {
@@ -588,7 +462,6 @@ export async function enrichProfileWithReelViews(profile: InstagramProfile): Pro
   const updatedPosts = profile.latestPosts.map(post => {
     const accurateViews = viewsMap.get(post.shortCode)
     if (accurateViews) {
-      console.log(`[Apify Reels] Updating ${post.shortCode}: ${post.videoViewCount} -> ${accurateViews}`)
       return { ...post, videoViewCount: accurateViews }
     }
     return post
@@ -598,15 +471,12 @@ export async function enrichProfileWithReelViews(profile: InstagramProfile): Pro
   const recentUpdatedPosts = updatedPosts.filter(p => isPostRecent(p))
   const updatedVideoPosts = recentUpdatedPosts.filter(p => p.videoViewCount && p.videoViewCount > 0)
 
-  // Average
   const avgVideoViews = updatedVideoPosts.length > 0
     ? Math.round(updatedVideoPosts.reduce((sum, p) => sum + (p.videoViewCount || 0), 0) / updatedVideoPosts.length)
     : 0
 
-  // Median
   const medianVideoViews = calculateMedian(updatedVideoPosts.map(p => p.videoViewCount || 0))
 
-  // Reach multipliers
   const reachMultiplier = profile.followersCount > 0 && avgVideoViews > 0
     ? avgVideoViews / profile.followersCount
     : 0
@@ -615,9 +485,7 @@ export async function enrichProfileWithReelViews(profile: InstagramProfile): Pro
     ? medianVideoViews / profile.followersCount
     : 0
 
-  console.log(`[Apify Reels] Updated avgVideoViews: ${profile.avgVideoViews} -> ${avgVideoViews}`)
-  console.log(`[Apify Reels] Updated medianVideoViews: ${profile.medianVideoViews} -> ${medianVideoViews}`)
-  console.log(`[Apify Reels] Updated reachMultiplier: ${profile.reachMultiplier} -> ${Math.round(reachMultiplier * 100) / 100}`)
+  console.log(`[Apify Reels] Updated avgVideoViews: ${profile.avgVideoViews} -> ${avgVideoViews}, median: ${profile.medianVideoViews} -> ${medianVideoViews}`)
 
   return {
     ...profile,
@@ -666,79 +534,21 @@ export async function fetchInstagramComments(
   postUrls: string[],
   commentsPerPost: number = 15
 ): Promise<InstagramComment[]> {
-  const apiToken = process.env.APIFY_API_TOKEN
-
-  if (!apiToken) {
-    throw new Error('APIFY_API_TOKEN is not configured')
-  }
-
   console.log(`[Apify Comments] Fetching comments for ${postUrls.length} posts...`)
 
-  try {
-    // Start the Instagram Comments Scraper actor
-    const runResponse = await fetch(
-      `${APIFY_API_BASE}/acts/apify~instagram-comment-scraper/runs?token=${apiToken}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          directUrls: postUrls,
-          resultsLimit: commentsPerPost,
-          includeReplies: false,  // Keep costs down
-        }),
-      }
-    )
+  const items = await runApifyActor(
+    'apify~instagram-comment-scraper',
+    {
+      directUrls: postUrls,
+      resultsLimit: commentsPerPost,
+      includeReplies: false,  // Keep costs down
+    },
+    { label: 'Apify Comments', maxAttempts: 30 }
+  )
 
-    if (!runResponse.ok) {
-      const error = await runResponse.text()
-      throw new Error(`Failed to start Comments Scraper: ${error}`)
-    }
-
-    const runData = await runResponse.json()
-    const runId = runData.data.id
-
-    console.log(`[Apify Comments] Actor started, run ID: ${runId}`)
-
-    // Poll for completion
-    let status = 'RUNNING'
-    let attempts = 0
-    const maxAttempts = 30 // 1 minute max
-
-    while (status === 'RUNNING' || status === 'READY') {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-
-      const statusResponse = await fetch(
-        `${APIFY_API_BASE}/actor-runs/${runId}?token=${apiToken}`
-      )
-      const statusData = await statusResponse.json()
-      status = statusData.data.status
-
-      attempts++
-      if (attempts >= maxAttempts) {
-        throw new Error('Timeout waiting for Comments Scraper')
-      }
-    }
-
-    if (status !== 'SUCCEEDED') {
-      throw new Error(`Comments Scraper failed with status: ${status}`)
-    }
-
-    // Get dataset ID from run
-    const datasetId = runData.data.defaultDatasetId
-
-    // Fetch results from dataset
-    const datasetResponse = await fetch(
-      `${APIFY_API_BASE}/datasets/${datasetId}/items?token=${apiToken}`
-    )
-
-    if (!datasetResponse.ok) {
-      throw new Error('Failed to fetch comments dataset')
-    }
-
-    const items = await datasetResponse.json()
-
-    // Parse comments
-    const comments: InstagramComment[] = items.map((item: Record<string, unknown>) => ({
+  const comments: InstagramComment[] = items.map((i) => {
+    const item = i as Record<string, unknown>
+    return {
       id: item.id as string || '',
       text: item.text as string || '',
       ownerUsername: item.ownerUsername as string || '',
@@ -747,16 +557,11 @@ export async function fetchInstagramComments(
       likesCount: (item.likesCount as number) || 0,
       repliesCount: item.repliesCount as number || 0,
       isVerified: item.isVerified as boolean || false,
-    }))
+    }
+  })
 
-    console.log(`[Apify Comments] Success! Fetched ${comments.length} comments`)
-
-    return comments
-
-  } catch (error) {
-    console.error('[Apify Comments] Error:', error)
-    throw error
-  }
+  console.log(`[Apify Comments] Success! Fetched ${comments.length} comments`)
+  return comments
 }
 
 /**
@@ -852,6 +657,11 @@ export function analyzeCommentQuality(comments: InstagramComment[]): CommentAnal
   const redFlags: string[] = []
   const greenFlags: string[] = []
 
+  // v5.1: malá vzorka = orientačný výsledok (top-liked komentáre sú navyše biased)
+  if (comments.length < 30) {
+    redFlags.push(`Malý vzorek (${comments.length} komentářů) — výsledek je orientační`)
+  }
+
   if (genericRatio > 50) redFlags.push(`${genericRatio}% generic komentářů (emoji, "Nice!")`)
   if (meaningfulRatio < 15) redFlags.push('Málo smysluplných komentářů')
   if (avgCommentLength < 15) redFlags.push('Velmi krátké komentáře v průměru')
@@ -877,8 +687,6 @@ export function analyzeCommentQuality(comments: InstagramComment[]): CommentAnal
 // ============================================
 // LOOKALIKE DISCOVERY - Related Profiles
 // ============================================
-
-import { LOOKALIKE_CONFIG } from './types'
 
 /**
  * Related profile data from Instagram Related Person Scraper
@@ -912,83 +720,20 @@ export async function fetchRelatedProfiles(
   username: string,
   limit: number = 20
 ): Promise<RelatedProfileData[]> {
-  const apiToken = process.env.APIFY_API_TOKEN
-
-  if (!apiToken) {
-    throw new Error('APIFY_API_TOKEN is not configured')
-  }
-
   const cleanUsername = username.replace('@', '').trim()
   console.log(`[Apify Related] Fetching suggested profiles for @${cleanUsername} (limit: ${limit})...`)
 
-  try {
-    // Use Instagram Related Person Scraper - specifically for suggested accounts
-    const runResponse = await fetch(
-      `${APIFY_API_BASE}/acts/api-empire~instagram-related-person-scraper/runs?token=${apiToken}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          usernames: [cleanUsername],
-          resultsLimit: limit,
-        }),
-      }
-    )
+  const rawResults = await runApifyActor(
+    'api-empire~instagram-related-person-scraper',
+    { usernames: [cleanUsername], resultsLimit: limit },
+    { label: 'Apify Related' }
+  )
 
-    if (!runResponse.ok) {
-      const errorText = await runResponse.text()
-      throw new Error(`Apify Related Person API error: ${runResponse.status} - ${errorText}`)
-    }
-
-    const runData = await runResponse.json()
-    const runId = runData.data.id
-
-    console.log(`[Apify Related] Run started: ${runId}`)
-
-    // Poll for completion
-    let status = 'RUNNING'
-    let attempts = 0
-    const maxAttempts = 90 // 3 minutes max
-
-    while (status === 'RUNNING' || status === 'READY') {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      attempts++
-
-      if (attempts >= maxAttempts) {
-        throw new Error('Apify Related Person scraper timeout (3 minutes)')
-      }
-
-      const statusResponse = await fetch(
-        `${APIFY_API_BASE}/actor-runs/${runId}?token=${apiToken}`
-      )
-      const statusData = await statusResponse.json()
-      status = statusData.data.status
-
-      if (attempts % 10 === 0) {
-        console.log(`[Apify Related] Status: ${status} (${attempts * 2}s elapsed)`)
-      }
-    }
-
-    if (status !== 'SUCCEEDED') {
-      throw new Error(`Apify Related Person scraper failed with status: ${status}`)
-    }
-
-    // Fetch results from dataset
-    const datasetId = runData.data.defaultDatasetId
-    const resultsResponse = await fetch(
-      `${APIFY_API_BASE}/datasets/${datasetId}/items?token=${apiToken}`
-    )
-
-    if (!resultsResponse.ok) {
-      throw new Error(`Failed to fetch related profiles: ${resultsResponse.status}`)
-    }
-
-    const rawResults = await resultsResponse.json()
-
-    // Transform results - this scraper returns profiles directly
-    const relatedProfiles: RelatedProfileData[] = rawResults
-      .filter((item: Record<string, unknown>) => item.username)
-      .map((item: Record<string, unknown>) => ({
+  const relatedProfiles: RelatedProfileData[] = rawResults
+    .filter((item) => (item as Record<string, unknown>).username)
+    .map((i) => {
+      const item = i as Record<string, unknown>
+      return {
         username: item.username as string,
         fullName: item.full_name as string || item.fullName as string || undefined,
         profilePicUrl: item.profile_pic_url as string || item.profilePicUrl as string || undefined,
@@ -997,16 +742,11 @@ export async function fetchRelatedProfiles(
         id: item.id as string || item.pk as string || undefined,
         followersCount: item.followers_count as number || item.followersCount as number || undefined,
         biography: item.biography as string || item.bio as string || undefined,
-      }))
+      }
+    })
 
-    console.log(`[Apify Related] Found ${relatedProfiles.length} suggested profiles`)
-
-    return relatedProfiles
-
-  } catch (error) {
-    console.error('[Apify Related] Error:', error)
-    throw error
-  }
+  console.log(`[Apify Related] Found ${relatedProfiles.length} suggested profiles`)
+  return relatedProfiles
 }
 
 /**
@@ -1030,7 +770,6 @@ export function filterRelatedProfiles(
       console.log(`[Lookalike]   Skipping @${p.username}: private account`)
       return false
     }
-    // If we have followers count, check minimum
     if (p.followersCount !== undefined && p.followersCount < minFollowers) {
       console.log(`[Lookalike]   Skipping @${p.username}: only ${p.followersCount} followers`)
       return false
@@ -1045,11 +784,8 @@ export function filterRelatedProfiles(
     (b.followersCount || 0) - (a.followersCount || 0)
   )
 
-  // Return up to limit usernames
   const result = sorted.slice(0, maxProfiles).map(p => p.username)
-
   console.log(`[Lookalike] Returning ${result.length} for detailed analysis`)
-
   return result
 }
 
@@ -1081,7 +817,6 @@ export async function fetchMultipleProfiles(
   }
 
   console.log(`[Lookalike] Fetched ${profiles.length}/${usernames.length} profiles (${errors.length} failed)`)
-
   return profiles
 }
 
@@ -1196,7 +931,7 @@ export function extractHashtagsFromProfile(
   }
 
   // Remove duplicates and return max 6
-  return [...new Set(hashtags)].slice(0, 6)
+  return Array.from(new Set(hashtags)).slice(0, 6)
 }
 
 /**
@@ -1206,91 +941,33 @@ export async function fetchHashtagPosts(
   hashtags: string[],
   limit: number = 100
 ): Promise<HashtagPost[]> {
-  const apiToken = process.env.APIFY_API_TOKEN
-
-  if (!apiToken) {
-    throw new Error('APIFY_API_TOKEN is not configured')
-  }
-
   console.log(`[Apify Hashtag] Fetching posts from hashtags: ${hashtags.join(', ')}`)
 
-  try {
-    const runResponse = await fetch(
-      `${APIFY_API_BASE}/acts/apify~instagram-hashtag-scraper/runs?token=${apiToken}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          hashtags: hashtags,
-          resultsLimit: Math.ceil(limit / hashtags.length),
-          resultsType: 'posts',
-        }),
-      }
-    )
+  const rawResults = await runApifyActor(
+    'apify~instagram-hashtag-scraper',
+    {
+      hashtags: hashtags,
+      resultsLimit: Math.ceil(limit / hashtags.length),
+      resultsType: 'posts',
+    },
+    { label: 'Apify Hashtag' }
+  )
 
-    if (!runResponse.ok) {
-      const errorText = await runResponse.text()
-      throw new Error(`Apify Hashtag API error: ${runResponse.status} - ${errorText}`)
-    }
-
-    const runData = await runResponse.json()
-    const runId = runData.data.id
-
-    console.log(`[Apify Hashtag] Run started: ${runId}`)
-
-    // Poll for completion
-    let status = 'RUNNING'
-    let attempts = 0
-    const maxAttempts = 90
-
-    while (status === 'RUNNING' || status === 'READY') {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      attempts++
-
-      if (attempts >= maxAttempts) {
-        throw new Error('Apify Hashtag scraper timeout')
-      }
-
-      const statusResponse = await fetch(
-        `${APIFY_API_BASE}/actor-runs/${runId}?token=${apiToken}`
-      )
-      const statusData = await statusResponse.json()
-      status = statusData.data.status
-
-      if (attempts % 15 === 0) {
-        console.log(`[Apify Hashtag] Status: ${status} (${attempts * 2}s)`)
-      }
-    }
-
-    if (status !== 'SUCCEEDED') {
-      throw new Error(`Apify Hashtag scraper failed: ${status}`)
-    }
-
-    const datasetId = runData.data.defaultDatasetId
-    const resultsResponse = await fetch(
-      `${APIFY_API_BASE}/datasets/${datasetId}/items?token=${apiToken}`
-    )
-
-    const rawResults = await resultsResponse.json()
-
-    const posts: HashtagPost[] = rawResults
-      .filter((item: Record<string, unknown>) => item.ownerUsername)
-      .map((item: Record<string, unknown>) => ({
+  const posts: HashtagPost[] = rawResults
+    .filter((item) => (item as Record<string, unknown>).ownerUsername)
+    .map((i) => {
+      const item = i as Record<string, unknown>
+      return {
         username: item.ownerUsername as string,
         shortCode: item.shortCode as string || '',
         likesCount: item.likesCount as number || 0,
         commentsCount: item.commentsCount as number || 0,
         ownerFollowers: item.ownerFollowersCount as number || undefined,
-      }))
+      }
+    })
 
-    console.log(`[Apify Hashtag] Found ${posts.length} posts`)
-
-    return posts
-
-  } catch (error) {
-    console.error('[Apify Hashtag] Error:', error)
-    throw error
-  }
+  console.log(`[Apify Hashtag] Found ${posts.length} posts`)
+  return posts
 }
 
 /**
@@ -1329,6 +1006,5 @@ export function getInfluencersFromHashtags(
     .map(([username]) => username)
 
   console.log(`[Hashtag] Found ${sorted.length} potential influencers`)
-
   return sorted
 }

@@ -11,6 +11,7 @@ import {
   Legend,
 } from 'chart.js'
 import { Bar } from 'react-chartjs-2'
+import type { ReportData } from '@/lib/types'
 
 ChartJS.register(
   CategoryScale,
@@ -20,247 +21,6 @@ ChartJS.register(
   Tooltip,
   Legend
 )
-
-interface ReportData {
-  input: {
-    username: string
-    category: string
-    offeredPrice: number
-    averageOrderValue?: number
-  }
-  profile: {
-    username: string
-    fullName: string
-    biography: string
-    followersCount: number
-    followsCount: number
-    postsCount: number
-    verified: boolean
-    profilePicUrl: string
-    engagementRate: number
-    avgLikes: number
-    avgComments: number
-    avgVideoViews: number
-    reachMultiplier: number
-    // Median values (more robust against outliers)
-    medianLikes?: number
-    medianComments?: number
-    medianVideoViews?: number
-    medianEngagementRate?: number
-    medianReachMultiplier?: number
-    // Trimmed mean (10% cut - compromise)
-    trimmedMeanLikes?: number
-    trimmedMeanComments?: number
-    trimmedMeanVideoViews?: number
-    trimmedMeanEngagementRate?: number
-    hasHighVariance?: boolean
-  }
-  topPosts: Array<{
-    type: string
-    likesCount: number
-    commentsCount: number
-    videoViewCount?: number
-    caption: string
-  }>
-  topReels: Array<{
-    videoViewCount: number
-    caption?: string
-  }>
-  research: {
-    fullName: string
-    nickname?: string
-    occupation: string
-    achievements: string[]
-    partnerInfo?: string
-    mediaAppearances?: {
-      tvShows: string[]
-      interviews: string[]
-      articles: string[]
-    }
-    upcomingEvents?: {
-      hasEvents: boolean
-      events: string[]
-    }
-    recentNews?: {
-      hasNews: boolean
-      headlines: string[]
-    }
-    // NEW: Brand Partnerships
-    brandPartnerships?: {
-      found: boolean
-      partnerships: Array<{
-        brandName: string
-        date?: string
-        type: 'paid' | 'organic' | 'unknown'
-        isCompetitor?: boolean
-        category?: string
-      }>
-      organicBrands: string[]
-    }
-    controversies: {
-      found: boolean
-      items?: Array<{
-        description: string
-        severity: string
-        date?: string
-        resolved?: boolean
-        category?: string
-      }>
-    }
-    // NEW: Commercialization Risk
-    commercializationRisk?: {
-      totalBrandMentions: number
-      paidPartnerships: number
-      organicMentions: number
-      commercialRatio: number
-      riskLevel: 'LOW' | 'MEDIUM' | 'HIGH'
-      warning?: string
-    }
-    currentBehavior: string
-    mediaPresentation: string
-    brandSafetyScore: number
-    suitableBrands: string[]
-    unsuitableBrands: string[]
-    sources?: string[]
-  }
-  // NEW: Comment Quality Analysis
-  commentAnalysis?: {
-    totalComments: number
-    genericComments: number
-    meaningfulComments: number
-    genericRatio: number
-    meaningfulRatio: number
-    avgCommentLength: number
-    commentQualityScore: number
-    qualityRating: 'LOW' | 'MEDIUM' | 'HIGH'
-    redFlags: string[]
-    greenFlags: string[]
-  }
-  metrics: {
-    engagementRate: number
-    reachMultiplier: number
-    // NEW: ER Benchmark
-    erBenchmark?: {
-      value: number
-      rating: 'POOR' | 'BELOW_AVERAGE' | 'AVERAGE' | 'GOOD' | 'EXCELLENT'
-      percentile: number
-      context: string
-    }
-    // NEW: Audience Quality
-    audienceQuality?: {
-      estimatedQuality: number
-      confidence: 'LOW' | 'MEDIUM' | 'HIGH'
-      redFlags: string[]
-      greenFlags: string[]
-      riskLevel: 'LOW' | 'MEDIUM' | 'HIGH'
-    }
-    // NEW: Viral Potential
-    viralPotential?: {
-      avgReelViews: number
-      maxReelViews: number
-      topPercentile90Views: number
-      consistency: number
-      viralScore: number
-      viralRating: 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH'
-      prediction: {
-        conservative: number
-        realistic: number
-        optimistic: number
-      }
-    }
-    marketValue: {
-      conservativeLow: number
-      conservativeHigh: number
-      premiumLow: number
-      premiumHigh: number
-      celebrityBonus?: number
-      celebrityTier?: string
-    }
-    roi: {
-      savingsPercent: number
-      savingsAmount: number
-      influencerCPM: number
-      totalContractValue: number
-      metaAdsEquivalent: number
-      delivery?: {
-        reelsPerMonth: number
-        postsPerMonth: number
-        storiesPerMonth: number
-        totalContentPerMonth: number
-        monthlyReach: number
-        monthlyReachMin: number
-        monthlyReachMax: number
-        monthlyEngagements: number
-        totalReels: number
-        totalPosts: number
-        totalStories: number
-        totalContent: number
-        totalReach: number
-        totalReachMin: number
-        totalReachMax: number
-        totalEngagements: number
-      }
-      valueBreakdown?: {
-        reachValue: number
-        reachExplanation: string
-        engagementValue: number
-        engagementExplanation: string
-        contentValue: number
-        contentExplanation: string
-        totalValue: number
-        totalCost: number
-        valueRatio: number
-        netValue: number
-      }
-    }
-    // NEW: Conversion Predictions with Scenario Matrix
-    predictions?: {
-      expectedClicks: number
-      expectedClicksLow: number
-      expectedClicksHigh: number
-      expectedConversions?: number
-      expectedConversionsLow?: number
-      expectedConversionsHigh?: number
-      expectedRevenue?: number
-      breakEvenSales?: number
-      expectedROI?: number
-      ctrUsed: number
-      conversionRateUsed?: number
-      // Scenario Matrix
-      scenarioMatrix?: Array<Array<{
-        ctr: number
-        conversionRate: number
-        clicks: number
-        conversions: number
-        revenue: number
-        roi: number
-        isBreakEven: boolean
-        isProfitable: boolean
-      }>>
-      ctrOptions?: number[]
-      crOptions?: number[]
-      recommendedCTR?: number
-      recommendedCR?: number
-    }
-    score: {
-      finalScore: number
-      recommendation: string
-      priceScore: number
-      engagementScore: number
-      reachScore: number
-      brandSafetyScore: number
-    }
-  }
-  text: {
-    heroSubtitle: string
-    bioSummary?: string
-    mediaHighlights?: string
-    controversyContext?: string
-    upcomingEventsText?: string
-    recommendationText: string
-    verdictText: string
-  }
-}
 
 interface PDFReportProps {
   data: ReportData
@@ -349,8 +109,8 @@ export default function PDFReport({ data }: PDFReportProps) {
     }
   }
 
-  // Cost comparison chart data
-  const meta1M = 30000
+  // Cost comparison chart data (v5.1: dynamický CPM namiesto hardcoded 30K)
+  const meta1M = Math.round((data.metrics.roi.metaAdsCPM || 35) * 1000)
   const influencer1M = Math.round(data.metrics.roi.influencerCPM * 1000)
   const metaTotal = data.metrics.roi.metaAdsEquivalent
   const influencerTotal = data.metrics.roi.totalContractValue
@@ -867,7 +627,7 @@ export default function PDFReport({ data }: PDFReportProps) {
               })}
               <tr className="bg-gray-50 border-t-2 border-gray-300">
                 <td className="py-2 px-3 font-semibold">Priemer</td>
-                <td className="py-2 px-3 text-right font-bold">{formatNumber(data.profile.avgLikes)}</td>
+                <td className="py-2 px-3 text-right font-bold">{formatNumber(data.profile.avgLikes || 0)}</td>
                 <td className="py-2 px-3 text-right font-bold">{Math.round(data.profile.avgComments || 0)}</td>
                 <td className="py-2 px-3 text-right font-bold">{data.profile.engagementRate?.toFixed(2)}%</td>
               </tr>
@@ -991,10 +751,18 @@ export default function PDFReport({ data }: PDFReportProps) {
                 <tr className="bg-gray-50">
                   <td className="py-2 px-2 font-bold">CELKOVÁ HODNOTA</td>
                   <td className="py-2 px-2 text-right font-bold text-lg" style={{ color: '#3333FF' }}>{formatNumber(data.metrics.roi.valueBreakdown.totalValue)} CZK</td>
-                  <td className="py-2 px-2"></td>
+                  <td className="py-2 px-2 text-gray-500 text-xs">max(Reach, Engagement) + Content</td>
                 </tr>
               </tbody>
             </table>
+          )}
+
+          {/* v5.1: methodology note — media value is NOT double-counted */}
+          {data.metrics.roi.valueBreakdown && (
+            <div className="text-xs text-gray-400 mb-3 -mt-2 px-1">
+              Reach a Engagement value se překrývají (engagement je součástí nakoupených impresí),
+              proto se do celkové hodnoty počítá vyšší z nich — ne součet.
+            </div>
           )}
 
           {/* Value Ratio Callout */}
@@ -1149,6 +917,23 @@ export default function PDFReport({ data }: PDFReportProps) {
           <h2 className="text-base font-bold uppercase mb-3" style={{ color: '#3333FF', letterSpacing: '0.5px' }}>
             Market Value & Brand Safety
           </h2>
+
+          {/* v5.1: Research failure warning — brand safety NOT verified */}
+          {data.research.researchUnavailable && (
+            <div className="bg-red-50 border-2 border-red-400 rounded-md p-3 mb-4">
+              <div className="flex items-start gap-2">
+                <span className="text-red-500 text-lg">⛔</span>
+                <div>
+                  <span className="text-sm font-bold text-red-700 block">Web research nedostupný — brand safety NEPROVĚŘENA</span>
+                  <span className="text-xs text-red-600">
+                    Automatický průzkum médií a kontroverzí selhal. Brand Safety Score ({data.research.brandSafetyScore}/10)
+                    je neutrální výchozí hodnota, NE výsledek ověření. Před rozhodnutím doporučujeme
+                    manuální kontrolu influencera, nebo report vygenerovat znovu.
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Two Tables Side by Side */}
           <div className="grid grid-cols-2 gap-3 mb-4">

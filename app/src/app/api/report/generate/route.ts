@@ -5,17 +5,39 @@
  *
  * Workflow:
  * 1. Fetch Instagram data (Apify)
- * 2. Perform web research (Claude)
- * 3. Calculate metrics
- * 4. Generate report text (Claude)
- * 5. Return complete report data
+ * 2-4. PARALELNE (v5.1): presné Reel views + analýza komentárov + web research
+ * 5. Calculate metrics
+ * 6. Generate report text (Claude)
+ * 7. Return complete report data
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { fetchInstagramData, getTopPosts, getTopReels, fetchInstagramComments, analyzeCommentQuality, CommentAnalysis, enrichProfileWithReelViews } from '@/lib/apify'
+import { fetchInstagramData, getTopPosts, getTopReels, fetchInstagramComments, analyzeCommentQuality, CommentAnalysis, enrichProfileWithReelViews, InstagramProfile } from '@/lib/apify'
 import { performWebResearch, generateReportText } from '@/lib/claude'
 import { calculateAllMetrics } from '@/lib/metrics'
 import { ReportInput, ReportData, ApiResponse, GenerateReportResponse } from '@/lib/types'
+
+async function fetchCommentAnalysis(profile: InstagramProfile): Promise<CommentAnalysis | undefined> {
+  try {
+    const topPostsForComments = getTopPosts(profile, 5)
+    const postUrls = topPostsForComments
+      .map(p => p.url)
+      .filter(url => url && url.length > 0)
+
+    if (postUrls.length === 0) {
+      console.log('[Comments] ⚠ No post URLs available for comment analysis')
+      return undefined
+    }
+
+    const comments = await fetchInstagramComments(postUrls, 15) // 15 comments per post (free tier)
+    const analysis = analyzeCommentQuality(comments)
+    console.log(`[Comments] ✓ Quality: ${analysis.qualityRating}, score: ${analysis.commentQualityScore}/100`)
+    return analysis
+  } catch (error) {
+    console.log('[Comments] ⚠ Comment analysis skipped (optional):', error instanceof Error ? error.message : 'Unknown error')
+    return undefined
+  }
+}
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now()
@@ -54,70 +76,50 @@ export async function POST(request: NextRequest) {
     console.log(`${'='.repeat(60)}\n`)
 
     // Step 1: Fetch Instagram data
-    console.log('[Step 1/6] Fetching Instagram data...')
-    let profile = await fetchInstagramData(input.username)
-    console.log(`[Step 1/6] ✓ Instagram data fetched (${profile.followersCount} followers)`)
+    console.log('[Step 1/4] Fetching Instagram data...')
+    const baseProfile = await fetchInstagramData(input.username)
+    console.log(`[Step 1/4] ✓ Instagram data fetched (${baseProfile.followersCount} followers)`)
 
-    // Step 2: Enrich with accurate Reel views (videoPlayCount)
-    console.log('[Step 2/6] Fetching accurate Reel views...')
-    try {
-      profile = await enrichProfileWithReelViews(profile)
-      console.log(`[Step 2/6] ✓ Reel views enriched (avgViews: ${profile.avgVideoViews?.toLocaleString()})`)
-    } catch (reelError) {
-      console.log('[Step 2/6] ⚠ Reel enrichment skipped:', reelError instanceof Error ? reelError.message : 'Unknown error')
-      // Continue with original videoViewCount values
-    }
+    // Steps 2-4 in PARALLEL — all depend only on the base profile:
+    //   a) accurate Reel views (Apify Reel Scraper)
+    //   b) comment quality analysis (Apify Comments Scraper)
+    //   c) web research (Claude + web search)
+    console.log('[Step 2/4] Running Reel views + comments + web research in parallel...')
+    const postCaptions = baseProfile.latestPosts.map(p => p.caption).filter(c => c)
 
-    // Step 3: Fetch and analyze comments (optional - for better bot detection)
-    console.log('[Step 3/6] Fetching comments for quality analysis...')
-    let commentAnalysis: CommentAnalysis | undefined
-    try {
-      // Get URLs of top 5 posts for comment analysis
-      const topPostsForComments = getTopPosts(profile, 5)
-      const postUrls = topPostsForComments
-        .map(p => p.url)
-        .filter(url => url && url.length > 0)
+    const [profile, commentAnalysis, research] = await Promise.all([
+      enrichProfileWithReelViews(baseProfile).catch((e) => {
+        console.log('[Step 2/4] ⚠ Reel enrichment skipped:', e instanceof Error ? e.message : 'Unknown error')
+        return baseProfile
+      }),
+      fetchCommentAnalysis(baseProfile),
+      performWebResearch(
+        baseProfile.username,
+        baseProfile.fullName || baseProfile.username,
+        input.category,
+        baseProfile.biography,
+        postCaptions,
+        input.country || 'CZ'
+      ),
+    ])
 
-      if (postUrls.length > 0) {
-        const comments = await fetchInstagramComments(postUrls, 15) // 15 comments per post (free tier)
-        commentAnalysis = analyzeCommentQuality(comments)
-        console.log(`[Step 3/6] ✓ Comment analysis complete (quality: ${commentAnalysis.qualityRating}, score: ${commentAnalysis.commentQualityScore}/100)`)
-      } else {
-        console.log('[Step 3/6] ⚠ No post URLs available for comment analysis')
-      }
-    } catch (commentError) {
-      console.log('[Step 3/6] ⚠ Comment analysis skipped (optional):', commentError instanceof Error ? commentError.message : 'Unknown error')
-      // Continue without comment analysis - it's optional
-    }
+    console.log(`[Step 2/4] ✓ Parallel fetch done (avgViews: ${profile.avgVideoViews?.toLocaleString()}, brand safety: ${research.brandSafetyScore}/10${research.researchUnavailable ? ' ⚠ NEPREVERENÉ' : ''})`)
 
-    // Step 4: Perform web research (including brand partnerships from posts)
-    console.log('[Step 4/6] Performing web research...')
-    const postCaptions = profile.latestPosts.map(p => p.caption).filter(c => c)
-    const research = await performWebResearch(
-      profile.username,
-      profile.fullName || profile.username,
-      input.category,
-      profile.biography,
-      postCaptions,
-      input.country || 'CZ' // Pass country for localized search
-    )
-    console.log(`[Step 4/6] ✓ Web research complete (brand safety: ${research.brandSafetyScore}/10)`)
-
-    // Step 5: Calculate metrics (with optional comment quality for better bot detection)
-    console.log('[Step 5/6] Calculating metrics...')
+    // Step 3: Calculate metrics
+    console.log('[Step 3/4] Calculating metrics...')
     const metrics = calculateAllMetrics(
       profile,
       input.offeredPrice,
       contractMonths,
       research.brandSafetyScore,
-      input.deliverables, // Deliverables from input
+      input.deliverables,
       input.averageOrderValue,
-      commentAnalysis // NEW: Pass comment quality for enhanced bot detection
+      commentAnalysis
     )
-    console.log(`[Step 5/6] ✓ Metrics calculated (score: ${metrics.score.finalScore}/10)`)
+    console.log(`[Step 3/4] ✓ Metrics calculated (score: ${metrics.score.finalScore}/10)`)
 
-    // Step 6: Generate report text
-    console.log('[Step 6/6] Generating report text...')
+    // Step 4: Generate report text
+    console.log('[Step 4/4] Generating report text...')
     const text = await generateReportText(
       {
         fullName: profile.fullName || profile.username,
@@ -134,7 +136,7 @@ export async function POST(request: NextRequest) {
         marketValueHigh: metrics.marketValue.premiumHigh || metrics.marketValue.conservativeHigh,
       }
     )
-    console.log('[Step 6/6] ✓ Report text generated')
+    console.log('[Step 4/4] ✓ Report text generated')
 
     // Compile report data
     const reportData: ReportData = {
@@ -143,11 +145,11 @@ export async function POST(request: NextRequest) {
       topPosts: getTopPosts(profile, 8),
       topReels: getTopReels(profile, 8),
       research,
-      commentAnalysis, // NEW: Comment quality analysis
+      commentAnalysis,
       metrics,
       text,
       generatedAt: new Date().toISOString(),
-      version: '5.0',
+      version: '5.1',
     }
 
     const duration = Date.now() - startTime

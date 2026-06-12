@@ -139,6 +139,19 @@ export interface DiscoveryInput {
 }
 
 /**
+ * Parameters extracted from a natural-language discovery query (Claude)
+ */
+export interface DiscoveryParameters {
+  hashtags: string[]
+  category: string
+  followersMin: number
+  followersMax: number
+  keywords: string[]
+  contentType: string
+  targetGender: 'male' | 'female' | 'any'
+}
+
+/**
  * Single influencer result from lookalike discovery
  */
 export interface DiscoveryInfluencer {
