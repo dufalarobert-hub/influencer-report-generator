@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic'
 // Dynamicky importujeme PDFReport bez SSR (kvoli Chart.js)
 const PDFReport = dynamic(() => import('@/components/PDFReport'), { ssr: false })
 
+
 const CATEGORIES = [
   'Sport',
   'Lifestyle',
@@ -132,6 +133,7 @@ interface ReportData {
 }
 
 export default function Home() {
+  // Report Generator state
   const [username, setUsername] = useState('')
   const [category, setCategory] = useState('Sport')
   const [country, setCountry] = useState('CZ')
@@ -210,16 +212,16 @@ export default function Home() {
     <main className="max-w-[210mm] mx-auto p-4 print:p-0 print:max-w-none">
       {/* Header - Hidden when printing */}
       {showForm && (
-        <div className="print:hidden mb-8">
+        <div className="print:hidden mb-6">
           <h1 className="text-3xl font-bold" style={{ color: '#3333FF' }}>
             nifty — minds
           </h1>
-          <p className="text-gray-500 text-sm">Influencer Report Generator v2.0</p>
+          <p className="text-gray-500 text-sm">Influencer Report Generator v5.0</p>
         </div>
       )}
 
       {/* Input Form - Hidden when printing */}
-      {showForm && (
+      {showForm && !loading && (
         <div className="print:hidden bg-white rounded-lg shadow-md p-6 mb-6">
           <h2 className="text-lg font-semibold mb-4">Generate Influencer Report</h2>
 

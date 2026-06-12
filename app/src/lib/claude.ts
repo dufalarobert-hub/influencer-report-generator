@@ -664,7 +664,7 @@ Príklad brandPartnerships:
       console.log(`[Claude] Web research attempt ${attempt}/${maxRetries}...`)
 
       const response = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-sonnet-4-20250514',
         max_tokens: 4096,
         tools: [
           {
@@ -840,7 +840,7 @@ Píš profesionálně, stručně, v češtině. Pokud nemáš info, dej null.`
 
   try {
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-sonnet-4-20250514',
       max_tokens: 1000,
       messages: [
         {
@@ -946,5 +946,230 @@ function getDefaultReportText(
     bioSummary: `${profile.fullName} je ${profile.category.toLowerCase()} influencer na Instagrame.`,
     recommendationText: `Odporúčame ${metrics.recommendation === 'STRONG BUY' || metrics.recommendation === 'BUY' ? 'akceptovať' : 'zvážiť'} spoluprácu za ${metrics.offeredPrice} CZK/mesiac. Úspora oproti Meta Ads: ${metrics.savingsPercent}%.`,
     verdictText: `${metrics.recommendation} – Score ${metrics.finalScore}/10`,
+  }
+}
+
+// ============================================
+// DISCOVERY TOOL - Parameter Extraction
+// ============================================
+
+import { DiscoveryParameters } from './types'
+
+// Hashtag suggestions by category and country
+const HASHTAG_CONFIG: Record<string, Record<string, string[]>> = {
+  CZ: {
+    'Sport': ['fitnesscz', 'sportcz', 'cviceni', 'treninkcz', 'fitnessmotivation', 'sportovkyne'],
+    'Lifestyle': ['lifestylecz', 'zivotnisstyl', 'inspiration', 'czechblogger', 'lifestyleblogger'],
+    'Beauty & Fashion': ['beautycz', 'kosmetika', 'modacz', 'fashion', 'czechbeauty', 'beautyblogger'],
+    'Fitness & Health': ['fitnesscz', 'zdravyzivotnistyl', 'cviceni', 'zdravestravovani', 'workout', 'fitnessgirl'],
+    'Food & Gastro': ['foodcz', 'jidlo', 'varenicz', 'foodblogger', 'recepty', 'foodie'],
+    'Travel': ['cestovani', 'travelbloggercz', 'cestovatelka', 'cestujem', 'dovolena', 'travelczech', 'cestujemeczech', 'travelblogger', 'wanderlust'],
+    'Tech & Gaming': ['techcz', 'gaming', 'hrycz', 'technologie', 'gamercz'],
+    'Entertainment': ['zabava', 'humor', 'komediacz', 'cesko', 'funny'],
+    'Family & Parenting': ['maminka', 'rodicovstvi', 'deti', 'momblogger', 'rodina', 'mamablogger'],
+    'Business & Finance': ['byznyscz', 'podnikani', 'finance', 'investice', 'motivace'],
+  },
+  SK: {
+    'Sport': ['fitnesssk', 'sportsk', 'cvicenie', 'treningsk', 'fitnessmotivation'],
+    'Lifestyle': ['lifestylesk', 'cestovanie', 'zivotnysstyl', 'inspiration', 'slovakblogger'],
+    'Beauty & Fashion': ['beautysk', 'kozmetika', 'modask', 'fashion', 'slovakbeauty'],
+    'Fitness & Health': ['fitnesssk', 'zdravyzivotnystyl', 'cvicenie', 'zdravestravovanie', 'workout'],
+    'Food & Gastro': ['foodsk', 'jedlo', 'varenie', 'foodblogger', 'recepty'],
+    'Travel': ['cestovaniesk', 'travel', 'vylet', 'dovolenka', 'slovaktravel'],
+    'Tech & Gaming': ['techsk', 'gaming', 'hry', 'technologie', 'gamersk'],
+    'Entertainment': ['zabava', 'humor', 'komediesk', 'slovensko', 'funny'],
+    'Family & Parenting': ['mamicka', 'rodicovstvo', 'deti', 'momblogger', 'rodina'],
+    'Business & Finance': ['byznyssk', 'podnikanie', 'financie', 'investicie', 'motivacia'],
+  },
+  DE: {
+    'Sport': ['fitnessdeutschland', 'sportdeutschland', 'training', 'fitness', 'workout'],
+    'Lifestyle': ['lifestylegermany', 'lebenstil', 'inspiration', 'germanblogger', 'lifestyle'],
+    'Beauty & Fashion': ['beautygermany', 'kosmetik', 'mode', 'fashion', 'germanbeauty'],
+    'Fitness & Health': ['fitnessdeutschland', 'gesundheit', 'training', 'ernahrung', 'workout'],
+    'default': ['deutschland', 'german', 'lifestyle', 'blogger', 'influencer'],
+  },
+  IT: {
+    'Sport': ['fitnessitalia', 'sportitalia', 'allenamento', 'fitness', 'workout'],
+    'Lifestyle': ['lifestyleitalia', 'stiledivita', 'ispirazione', 'italianblogger', 'lifestyle'],
+    'Beauty & Fashion': ['beautyitalia', 'cosmetici', 'moda', 'fashion', 'italianbeauty'],
+    'Fitness & Health': ['fitnessitalia', 'salute', 'allenamento', 'alimentazione', 'workout'],
+    'default': ['italia', 'italian', 'lifestyle', 'blogger', 'influencer'],
+  },
+  PL: {
+    'Sport': ['fitnesspolska', 'sportpolska', 'trening', 'fitness', 'cwiczenia'],
+    'Lifestyle': ['lifestylepolska', 'styl', 'inspiracja', 'polishblogger', 'lifestyle'],
+    'Beauty & Fashion': ['beautypolska', 'kosmetyki', 'moda', 'fashion', 'polishbeauty'],
+    'Fitness & Health': ['fitnesspolska', 'zdrowie', 'trening', 'zdrowezywienie', 'workout'],
+    'default': ['polska', 'polish', 'lifestyle', 'blogger', 'influencer'],
+  },
+  RO: {
+    'default': ['romania', 'romanian', 'lifestyle', 'blogger', 'influencer', 'fitness'],
+  },
+  HU: {
+    'default': ['magyarorszag', 'hungarian', 'lifestyle', 'blogger', 'influencer', 'fitness'],
+  },
+}
+
+/**
+ * Extract discovery parameters from natural language query using Claude
+ */
+export async function extractDiscoveryParameters(
+  query: string,
+  country: string = 'CZ'
+): Promise<DiscoveryParameters> {
+  const client = getClient()
+
+  console.log(`[Claude Discovery] Extracting parameters from: "${query.substring(0, 100)}..."`)
+
+  const countryConfig = COUNTRY_CONFIG[country] || COUNTRY_CONFIG['CZ']
+
+  const prompt = `Si expert na Instagram influencer marketing. Analyzuj popis od klienta a vygeneruj NAJLEPŠIE možné parametre pre vyhľadávanie influencerov.
+
+POPIS OD KLIENTA:
+"${query}"
+
+KRAJINA: ${countryConfig.name} (${country})
+JAZYK: ${countryConfig.searchLang}
+
+TVOJA ÚLOHA:
+1. Pochop ČO PRESNE klient hľadá (typ influencera, niche, štýl obsahu)
+2. Vygeneruj 8-10 NAJRELEVANTNEJŠÍCH hashtagov ktoré by takýto influencer REÁLNE používal
+3. Extrahuj všetky parametre
+
+KRITICKÉ PRAVIDLÁ PRE HASHTAGS:
+- Generuj 8-10 hashtagov (nie menej!)
+- Hashtagy musia byť REÁLNE POUŽÍVANÉ na Instagrame v danej krajine
+- Mix: 50% lokálne (v jazyku krajiny), 50% medzinárodné (anglicky)
+- Bez # znaku
+- Premýšľaj: "Aké hashtagy by TENTO TYP influencera používal vo svojich postoch?"
+- Zahrň: niche hashtags, community hashtags, lokálne hashtags
+
+PRÍKLADY HASHTAGOV PODĽA NICHE:
+- Travel žena CZ: cestovatelka, travelgirl, cestujemeczech, wanderlust, travelbloggercz, cestovani, dovolena, exploremore
+- Fitness žena CZ: fitgirl, fitnesscz, cvicenidoma, healthylifestyle, workoutmotivation, fitnessmotivace, treninky
+- Beauty CZ: czechbeauty, makeuplover, skincareroutine, beautybloggercz, kosmetika, krasa
+
+PRAVIDLÁ PRE FOLLOWERS:
+- Ak je uvedené presné číslo (napr. "30-50k"), použi ho presne
+- "mikro" = 5000-50000
+- "malý" = 10000-50000
+- "stredný" = 50000-200000
+- "veľký" = 200000+
+
+PRAVIDLÁ PRE POHLAVIE:
+- "influencerka/blogerka" = female
+- "influencer/bloger" = male
+- Neuvedené = any
+
+KATEGÓRIE: Sport, Lifestyle, Beauty & Fashion, Tech & Gaming, Food & Gastro, Travel, Fitness & Health, Entertainment, Business & Finance, Family & Parenting
+
+VRÁŤ VÝHRADNE TENTO JSON (žiadny iný text!):
+{
+  "hashtags": ["hashtag1", "hashtag2", "hashtag3", "hashtag4", "hashtag5", "hashtag6", "hashtag7", "hashtag8"],
+  "category": "kategória",
+  "followersMin": 30000,
+  "followersMax": 50000,
+  "keywords": ["kľúčové", "slová"],
+  "contentType": "lifestyle",
+  "targetGender": "female"
+}
+
+PRÍKLAD:
+Popis: "Hľadám českou travel influencerku s 30-50k followers pre spoluprácu s kufrovým brandom"
+Výstup:
+{
+  "hashtags": ["cestovatelka", "travelgirl", "travelbloggercz", "cestujemeczech", "wanderlust", "cestovani", "dovolena", "travelczech", "exploretheworld", "cestovanislaskou"],
+  "category": "Travel",
+  "followersMin": 30000,
+  "followersMax": 50000,
+  "keywords": ["travel", "kufry", "cestování", "žena"],
+  "contentType": "lifestyle",
+  "targetGender": "female"
+}`
+
+  try {
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 800,  // Increased for more hashtags
+      messages: [
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+    })
+
+    let textContent = ''
+    for (const block of response.content) {
+      if (block.type === 'text') {
+        textContent += block.text
+      }
+    }
+
+    console.log('[Claude Discovery] Raw response:', textContent.substring(0, 300))
+
+    // Parse JSON from response
+    const jsonMatch = textContent.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) {
+      console.error('[Claude Discovery] Could not find JSON in response')
+      return getDefaultDiscoveryParameters(query, country)
+    }
+
+    const result = JSON.parse(jsonMatch[0]) as DiscoveryParameters
+
+    // Validate and fix hashtags if needed
+    if (!result.hashtags || result.hashtags.length === 0) {
+      result.hashtags = getDefaultHashtags(result.category, country)
+    }
+
+    // Ensure hashtags don't have # prefix
+    result.hashtags = result.hashtags.map(h => h.replace(/^#/, ''))
+
+    console.log(`[Claude Discovery] Extracted: ${result.hashtags.length} hashtags, category: ${result.category}, followers: ${result.followersMin}-${result.followersMax}`)
+
+    return result
+
+  } catch (error) {
+    console.error('[Claude Discovery] Error:', error)
+    return getDefaultDiscoveryParameters(query, country)
+  }
+}
+
+/**
+ * Get default hashtags for a category and country
+ */
+function getDefaultHashtags(category: string, country: string): string[] {
+  const countryHashtags = HASHTAG_CONFIG[country] || HASHTAG_CONFIG['CZ']
+  return countryHashtags[category] || countryHashtags['default'] || ['influencer', 'lifestyle', 'blogger']
+}
+
+/**
+ * Default discovery parameters if extraction fails
+ */
+function getDefaultDiscoveryParameters(query: string, country: string): DiscoveryParameters {
+  // Try to detect category from query
+  const queryLower = query.toLowerCase()
+  let category = 'Lifestyle'
+
+  if (queryLower.includes('fitness') || queryLower.includes('sport') || queryLower.includes('cvič')) {
+    category = 'Fitness & Health'
+  } else if (queryLower.includes('beauty') || queryLower.includes('móda') || queryLower.includes('fashion') || queryLower.includes('kozmetik')) {
+    category = 'Beauty & Fashion'
+  } else if (queryLower.includes('food') || queryLower.includes('jedl') || queryLower.includes('varen')) {
+    category = 'Food & Gastro'
+  } else if (queryLower.includes('tech') || queryLower.includes('gaming') || queryLower.includes('hr')) {
+    category = 'Tech & Gaming'
+  } else if (queryLower.includes('travel') || queryLower.includes('cestov')) {
+    category = 'Travel'
+  }
+
+  return {
+    hashtags: getDefaultHashtags(category, country),
+    category,
+    followersMin: 10000,
+    followersMax: 500000,
+    keywords: query.split(' ').filter(w => w.length > 3).slice(0, 5),
+    contentType: 'lifestyle',
+    targetGender: 'any',
   }
 }

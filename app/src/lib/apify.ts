@@ -31,17 +31,64 @@ export interface InstagramProfile {
   isBusinessAccount: boolean
   businessCategoryName?: string
   latestPosts: InstagramPost[]
+  // Average (mean) values
   avgLikes?: number
   avgComments?: number
   avgVideoViews?: number
   engagementRate?: number
   reachMultiplier?: number
+  // Median values (more robust against outliers)
+  medianLikes?: number
+  medianComments?: number
+  medianVideoViews?: number
+  medianEngagementRate?: number
+  medianReachMultiplier?: number
+  // Trimmed mean (10% cut from both ends - compromise between avg and median)
+  trimmedMeanLikes?: number
+  trimmedMeanComments?: number
+  trimmedMeanVideoViews?: number
+  trimmedMeanEngagementRate?: number
+  // Outlier detection
+  hasHighVariance?: boolean  // true if avg > 2x median (indicates viral outliers)
 }
 
 const APIFY_API_BASE = 'https://api.apify.com/v2'
 
 // Maximum age of posts to include in metric calculations (in months)
 const MAX_POST_AGE_MONTHS = 6
+
+/**
+ * Calculate median of an array of numbers
+ * More robust against outliers than average
+ */
+function calculateMedian(values: number[]): number {
+  if (values.length === 0) return 0
+
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+
+  if (sorted.length % 2 === 0) {
+    return Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+  }
+  return sorted[mid]
+}
+
+/**
+ * Calculate trimmed mean (removes top and bottom 10% of values)
+ * Compromise between average and median - less affected by outliers
+ */
+function calculateTrimmedMean(values: number[], trimPercent: number = 0.1): number {
+  if (values.length === 0) return 0
+  if (values.length < 5) return calculateMedian(values) // Use median for small samples
+
+  const sorted = [...values].sort((a, b) => a - b)
+  const trimCount = Math.floor(sorted.length * trimPercent)
+  const trimmed = sorted.slice(trimCount, sorted.length - trimCount)
+
+  if (trimmed.length === 0) return calculateMedian(values)
+
+  return Math.round(trimmed.reduce((sum, val) => sum + val, 0) / trimmed.length)
+}
 
 /**
  * Check if a post is recent enough to include in calculations
@@ -96,7 +143,7 @@ export async function fetchInstagramData(username: string): Promise<InstagramPro
     // Poll for completion
     let status = 'RUNNING'
     let attempts = 0
-    const maxAttempts = 60 // 2 minutes max
+    const maxAttempts = 90 // 3 minutes max
 
     while (status === 'RUNNING' || status === 'READY') {
       await new Promise(resolve => setTimeout(resolve, 2000))
@@ -174,11 +221,12 @@ export async function fetchInstagramData(username: string): Promise<InstagramPro
       })
     }
 
-    // Calculate averages from RECENT posts only
+    // Calculate averages AND medians from RECENT posts only
     const postsWithEngagement = recentPosts.filter(p => p.likesCount > 0)
     // Fixed: Filter by videoViewCount only - Apify may return Reels as different types (Video, Reel, Clip, GraphVideo)
     const videoPosts = recentPosts.filter(p => p.videoViewCount && p.videoViewCount > 0)
 
+    // AVERAGE (mean) calculations
     const avgLikes = postsWithEngagement.length > 0
       ? Math.round(postsWithEngagement.reduce((sum, p) => sum + p.likesCount, 0) / postsWithEngagement.length)
       : 0
@@ -191,15 +239,54 @@ export async function fetchInstagramData(username: string): Promise<InstagramPro
       ? Math.round(videoPosts.reduce((sum, p) => sum + (p.videoViewCount || 0), 0) / videoPosts.length)
       : 0
 
+    // MEDIAN calculations (more robust against outliers)
+    const medianLikes = calculateMedian(postsWithEngagement.map(p => p.likesCount))
+    const medianComments = calculateMedian(postsWithEngagement.map(p => p.commentsCount))
+    const medianVideoViews = calculateMedian(videoPosts.map(p => p.videoViewCount || 0))
+
+    // TRIMMED MEAN calculations (10% cut from both ends - compromise)
+    const trimmedMeanLikes = calculateTrimmedMean(postsWithEngagement.map(p => p.likesCount))
+    const trimmedMeanComments = calculateTrimmedMean(postsWithEngagement.map(p => p.commentsCount))
+    const trimmedMeanVideoViews = calculateTrimmedMean(videoPosts.map(p => p.videoViewCount || 0))
+
     const followersCount = raw.followersCount || 0
 
-    const engagementRate = followersCount > 0
-      ? ((avgLikes + avgComments) / followersCount) * 100
+    // Calculate ER for EACH POST first, then average/median/trimmed mean
+    // This is the correct way - average the ERs, not average likes then calculate ER
+    const postERs = followersCount > 0
+      ? postsWithEngagement.map(p => ((p.likesCount + p.commentsCount) / followersCount) * 100)
+      : []
+
+    // Engagement rates (calculated correctly from per-post ERs)
+    const engagementRate = postERs.length > 0
+      ? postERs.reduce((sum, er) => sum + er, 0) / postERs.length
       : 0
 
+    const medianEngagementRate = postERs.length > 0
+      ? calculateMedian(postERs.map(er => Math.round(er * 100))) / 100  // Convert to preserve decimals
+      : 0
+
+    const trimmedMeanEngagementRate = postERs.length > 0
+      ? calculateTrimmedMean(postERs.map(er => Math.round(er * 100))) / 100
+      : 0
+
+    // Reach multipliers
     const reachMultiplier = followersCount > 0 && avgVideoViews > 0
       ? avgVideoViews / followersCount
       : 0
+
+    const medianReachMultiplier = followersCount > 0 && medianVideoViews > 0
+      ? medianVideoViews / followersCount
+      : 0
+
+    // Detect high variance (outliers present)
+    // If average ER is more than 2x the median ER, there are significant outliers
+    const hasHighVariance = engagementRate > 0 && medianEngagementRate > 0 && (engagementRate / medianEngagementRate) > 2
+
+    if (hasHighVariance) {
+      console.log(`[Apify] ⚠ High variance detected! Avg ER: ${engagementRate.toFixed(2)}%, Median ER: ${medianEngagementRate.toFixed(2)}% (ratio: ${(engagementRate / medianEngagementRate).toFixed(1)}x)`)
+      console.log(`[Apify]   → Using MEDIAN for more accurate ROI calculations`)
+    }
 
     const profile: InstagramProfile = {
       username: raw.username,
@@ -214,14 +301,29 @@ export async function fetchInstagramData(username: string): Promise<InstagramPro
       isBusinessAccount: raw.isBusinessAccount || false,
       businessCategoryName: raw.businessCategoryName,
       latestPosts,
+      // Average values
       avgLikes,
       avgComments,
       avgVideoViews,
       engagementRate: Math.round(engagementRate * 100) / 100,
       reachMultiplier: Math.round(reachMultiplier * 100) / 100,
+      // Median values (more robust)
+      medianLikes,
+      medianComments,
+      medianVideoViews,
+      medianEngagementRate: Math.round(medianEngagementRate * 100) / 100,
+      medianReachMultiplier: Math.round(medianReachMultiplier * 100) / 100,
+      // Trimmed mean (10% orez - kompromis)
+      trimmedMeanLikes,
+      trimmedMeanComments,
+      trimmedMeanVideoViews,
+      trimmedMeanEngagementRate: Math.round(trimmedMeanEngagementRate * 100) / 100,
+      // Outlier detection
+      hasHighVariance,
     }
 
     console.log(`[Apify] Success! @${cleanUsername}: ${followersCount} followers, ${latestPosts.length} posts`)
+    console.log(`[Apify] ER: ${profile.engagementRate}% (avg) / ${profile.trimmedMeanEngagementRate}% (trimmed) / ${profile.medianEngagementRate}% (median)${hasHighVariance ? ' ⚠️ HIGH VARIANCE' : ''}`)
 
     return profile
 
@@ -314,7 +416,7 @@ export async function fetchReelViews(reelUrls: string[]): Promise<Map<string, nu
     // Poll for completion
     let status = 'RUNNING'
     let attempts = 0
-    const maxAttempts = 60 // 2 minutes max
+    const maxAttempts = 90 // 3 minutes max
 
     while (status === 'RUNNING' || status === 'READY') {
       await new Promise(resolve => setTimeout(resolve, 2000))
@@ -492,25 +594,38 @@ export async function enrichProfileWithReelViews(profile: InstagramProfile): Pro
     return post
   })
 
-  // Recalculate averages with accurate data (only from recent posts!)
+  // Recalculate averages AND medians with accurate data (only from recent posts!)
   const recentUpdatedPosts = updatedPosts.filter(p => isPostRecent(p))
   const updatedVideoPosts = recentUpdatedPosts.filter(p => p.videoViewCount && p.videoViewCount > 0)
+
+  // Average
   const avgVideoViews = updatedVideoPosts.length > 0
     ? Math.round(updatedVideoPosts.reduce((sum, p) => sum + (p.videoViewCount || 0), 0) / updatedVideoPosts.length)
     : 0
 
+  // Median
+  const medianVideoViews = calculateMedian(updatedVideoPosts.map(p => p.videoViewCount || 0))
+
+  // Reach multipliers
   const reachMultiplier = profile.followersCount > 0 && avgVideoViews > 0
     ? avgVideoViews / profile.followersCount
     : 0
 
+  const medianReachMultiplier = profile.followersCount > 0 && medianVideoViews > 0
+    ? medianVideoViews / profile.followersCount
+    : 0
+
   console.log(`[Apify Reels] Updated avgVideoViews: ${profile.avgVideoViews} -> ${avgVideoViews}`)
+  console.log(`[Apify Reels] Updated medianVideoViews: ${profile.medianVideoViews} -> ${medianVideoViews}`)
   console.log(`[Apify Reels] Updated reachMultiplier: ${profile.reachMultiplier} -> ${Math.round(reachMultiplier * 100) / 100}`)
 
   return {
     ...profile,
     latestPosts: updatedPosts,
     avgVideoViews,
+    medianVideoViews,
     reachMultiplier: Math.round(reachMultiplier * 100) / 100,
+    medianReachMultiplier: Math.round(medianReachMultiplier * 100) / 100,
   }
 }
 
@@ -757,4 +872,463 @@ export function analyzeCommentQuality(comments: InstagramComment[]): CommentAnal
     redFlags,
     greenFlags,
   }
+}
+
+// ============================================
+// LOOKALIKE DISCOVERY - Related Profiles
+// ============================================
+
+import { LOOKALIKE_CONFIG } from './types'
+
+/**
+ * Related profile data from Instagram Related Person Scraper
+ */
+export interface RelatedProfileData {
+  username: string
+  fullName?: string
+  profilePicUrl?: string
+  isVerified?: boolean
+  isPrivate?: boolean
+  id?: string
+  followersCount?: number
+  biography?: string
+}
+
+/**
+ * Get lookalike config based on environment
+ */
+function getLookalikeConfig() {
+  const mode = process.env.DISCOVERY_MODE || process.env.NODE_ENV || 'development'
+  return mode === 'production' ? LOOKALIKE_CONFIG.production : LOOKALIKE_CONFIG.development
+}
+
+/**
+ * Fetch related/suggested profiles using Instagram Related Person Scraper
+ * This uses Instagram's actual "Suggested Accounts" feature
+ *
+ * Actor: api-empire/instagram-related-person-scraper
+ */
+export async function fetchRelatedProfiles(
+  username: string,
+  limit: number = 20
+): Promise<RelatedProfileData[]> {
+  const apiToken = process.env.APIFY_API_TOKEN
+
+  if (!apiToken) {
+    throw new Error('APIFY_API_TOKEN is not configured')
+  }
+
+  const cleanUsername = username.replace('@', '').trim()
+  console.log(`[Apify Related] Fetching suggested profiles for @${cleanUsername} (limit: ${limit})...`)
+
+  try {
+    // Use Instagram Related Person Scraper - specifically for suggested accounts
+    const runResponse = await fetch(
+      `${APIFY_API_BASE}/acts/api-empire~instagram-related-person-scraper/runs?token=${apiToken}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          usernames: [cleanUsername],
+          resultsLimit: limit,
+        }),
+      }
+    )
+
+    if (!runResponse.ok) {
+      const errorText = await runResponse.text()
+      throw new Error(`Apify Related Person API error: ${runResponse.status} - ${errorText}`)
+    }
+
+    const runData = await runResponse.json()
+    const runId = runData.data.id
+
+    console.log(`[Apify Related] Run started: ${runId}`)
+
+    // Poll for completion
+    let status = 'RUNNING'
+    let attempts = 0
+    const maxAttempts = 90 // 3 minutes max
+
+    while (status === 'RUNNING' || status === 'READY') {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      attempts++
+
+      if (attempts >= maxAttempts) {
+        throw new Error('Apify Related Person scraper timeout (3 minutes)')
+      }
+
+      const statusResponse = await fetch(
+        `${APIFY_API_BASE}/actor-runs/${runId}?token=${apiToken}`
+      )
+      const statusData = await statusResponse.json()
+      status = statusData.data.status
+
+      if (attempts % 10 === 0) {
+        console.log(`[Apify Related] Status: ${status} (${attempts * 2}s elapsed)`)
+      }
+    }
+
+    if (status !== 'SUCCEEDED') {
+      throw new Error(`Apify Related Person scraper failed with status: ${status}`)
+    }
+
+    // Fetch results from dataset
+    const datasetId = runData.data.defaultDatasetId
+    const resultsResponse = await fetch(
+      `${APIFY_API_BASE}/datasets/${datasetId}/items?token=${apiToken}`
+    )
+
+    if (!resultsResponse.ok) {
+      throw new Error(`Failed to fetch related profiles: ${resultsResponse.status}`)
+    }
+
+    const rawResults = await resultsResponse.json()
+
+    // Transform results - this scraper returns profiles directly
+    const relatedProfiles: RelatedProfileData[] = rawResults
+      .filter((item: Record<string, unknown>) => item.username)
+      .map((item: Record<string, unknown>) => ({
+        username: item.username as string,
+        fullName: item.full_name as string || item.fullName as string || undefined,
+        profilePicUrl: item.profile_pic_url as string || item.profilePicUrl as string || undefined,
+        isVerified: item.is_verified as boolean || item.isVerified as boolean || false,
+        isPrivate: item.is_private as boolean || item.isPrivate as boolean || false,
+        id: item.id as string || item.pk as string || undefined,
+        followersCount: item.followers_count as number || item.followersCount as number || undefined,
+        biography: item.biography as string || item.bio as string || undefined,
+      }))
+
+    console.log(`[Apify Related] Found ${relatedProfiles.length} suggested profiles`)
+
+    return relatedProfiles
+
+  } catch (error) {
+    console.error('[Apify Related] Error:', error)
+    throw error
+  }
+}
+
+/**
+ * Filter related profiles - remove private, filter by followers
+ * Returns usernames for detailed analysis
+ */
+export function filterRelatedProfiles(
+  profiles: RelatedProfileData[],
+  limit?: number
+): string[] {
+  const config = getLookalikeConfig()
+  const maxProfiles = limit || config.profilesToAnalyze
+  const minFollowers = config.minFollowersForInfluencer
+
+  console.log(`[Lookalike] Filtering ${profiles.length} related profiles...`)
+  console.log(`[Lookalike] Criteria: public, ${minFollowers.toLocaleString()}+ followers`)
+
+  // Filter out private accounts and small accounts
+  const validProfiles = profiles.filter(p => {
+    if (p.isPrivate) {
+      console.log(`[Lookalike]   Skipping @${p.username}: private account`)
+      return false
+    }
+    // If we have followers count, check minimum
+    if (p.followersCount !== undefined && p.followersCount < minFollowers) {
+      console.log(`[Lookalike]   Skipping @${p.username}: only ${p.followersCount} followers`)
+      return false
+    }
+    return true
+  })
+
+  console.log(`[Lookalike] Found ${validProfiles.length} valid profiles`)
+
+  // Sort by followers count if available (higher = more established)
+  const sorted = validProfiles.sort((a, b) =>
+    (b.followersCount || 0) - (a.followersCount || 0)
+  )
+
+  // Return up to limit usernames
+  const result = sorted.slice(0, maxProfiles).map(p => p.username)
+
+  console.log(`[Lookalike] Returning ${result.length} for detailed analysis`)
+
+  return result
+}
+
+/**
+ * Fetch multiple Instagram profiles sequentially
+ * Uses the existing fetchInstagramData function
+ */
+export async function fetchMultipleProfiles(
+  usernames: string[]
+): Promise<InstagramProfile[]> {
+  console.log(`[Lookalike] Fetching ${usernames.length} profiles...`)
+
+  const profiles: InstagramProfile[] = []
+  const errors: string[] = []
+
+  // Fetch profiles sequentially to avoid rate limits
+  for (const username of usernames) {
+    try {
+      console.log(`[Lookalike] Fetching profile: @${username}`)
+      const profile = await fetchInstagramData(username)
+      profiles.push(profile)
+    } catch (error) {
+      console.error(`[Lookalike] Failed to fetch @${username}:`, error)
+      errors.push(username)
+    }
+
+    // Small delay between requests to avoid rate limits
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+
+  console.log(`[Lookalike] Fetched ${profiles.length}/${usernames.length} profiles (${errors.length} failed)`)
+
+  return profiles
+}
+
+/**
+ * Calculate similarity score for a lookalike influencer
+ * Based on engagement quality and profile characteristics
+ */
+export function calculateSimilarityScore(
+  profile: InstagramProfile,
+  sourceFollowers: number
+): number {
+  let score = 0
+
+  // 1. Engagement Rate (40%) - most important for quality
+  const er = profile.medianEngagementRate || profile.engagementRate || 0
+  if (er >= 5) score += 40
+  else if (er >= 3.5) score += 35
+  else if (er >= 2.5) score += 28
+  else if (er >= 1.5) score += 20
+  else if (er >= 1) score += 12
+  else score += 0
+
+  // 2. Similar size to source (25%)
+  const sizeRatio = profile.followersCount / sourceFollowers
+  if (sizeRatio >= 0.5 && sizeRatio <= 2.0) {
+    score += 25  // Within 2x range
+  } else if (sizeRatio >= 0.2 && sizeRatio <= 5.0) {
+    score += 15  // Within 5x range
+  } else {
+    score += 5   // Very different size
+  }
+
+  // 3. Recent activity (15%)
+  const recentPosts = profile.latestPosts?.filter(p => isPostRecent(p, 1)) || []
+  if (recentPosts.length >= 4) score += 15
+  else if (recentPosts.length >= 2) score += 10
+  else if (recentPosts.length >= 1) score += 5
+
+  // 4. Profile quality (10%)
+  if (profile.biography && profile.biography.length > 50) score += 5
+  if (profile.isBusinessAccount) score += 5
+
+  // 5. Consistency bonus (10%)
+  if (!profile.hasHighVariance) score += 10
+
+  // Penalty for very low engagement
+  if (er < 0.5) {
+    score = Math.max(0, score - 15)
+  }
+
+  return Math.round(Math.min(100, score))
+}
+
+// ============================================
+// HASHTAG FALLBACK SCRAPING
+// ============================================
+
+/**
+ * Post from hashtag scraper
+ */
+export interface HashtagPost {
+  username: string
+  shortCode: string
+  likesCount: number
+  commentsCount: number
+  ownerFollowers?: number
+}
+
+/**
+ * Extract hashtags from bio and category
+ */
+export function extractHashtagsFromProfile(
+  bio: string,
+  category?: string,
+  username?: string
+): string[] {
+  const hashtags: string[] = []
+
+  // Extract hashtags from bio
+  const bioHashtags = bio.match(/#(\w+)/g) || []
+  hashtags.push(...bioHashtags.map(h => h.replace('#', '').toLowerCase()))
+
+  // Add category-based hashtags
+  if (category) {
+    const categoryLower = category.toLowerCase()
+    if (categoryLower.includes('fitness') || categoryLower.includes('sport')) {
+      hashtags.push('fitness', 'fitnessmotivation', 'workout', 'gym')
+    }
+    if (categoryLower.includes('beauty') || categoryLower.includes('fashion')) {
+      hashtags.push('beauty', 'fashion', 'style', 'makeup')
+    }
+    if (categoryLower.includes('travel')) {
+      hashtags.push('travel', 'wanderlust', 'travelgram', 'explore')
+    }
+    if (categoryLower.includes('food')) {
+      hashtags.push('food', 'foodie', 'foodporn', 'instafood')
+    }
+    if (categoryLower.includes('lifestyle')) {
+      hashtags.push('lifestyle', 'life', 'daily', 'instagood')
+    }
+    if (categoryLower.includes('art') || categoryLower.includes('creator')) {
+      hashtags.push('art', 'creative', 'artist', 'content')
+    }
+    if (categoryLower.includes('video') || categoryLower.includes('film')) {
+      hashtags.push('video', 'filmmaker', 'cinematography', 'reels')
+    }
+  }
+
+  // Add generic influencer hashtags as fallback
+  if (hashtags.length < 3) {
+    hashtags.push('influencer', 'contentcreator', 'instagram')
+  }
+
+  // Remove duplicates and return max 6
+  return [...new Set(hashtags)].slice(0, 6)
+}
+
+/**
+ * Fetch posts from hashtags (fallback when no related profiles)
+ */
+export async function fetchHashtagPosts(
+  hashtags: string[],
+  limit: number = 100
+): Promise<HashtagPost[]> {
+  const apiToken = process.env.APIFY_API_TOKEN
+
+  if (!apiToken) {
+    throw new Error('APIFY_API_TOKEN is not configured')
+  }
+
+  console.log(`[Apify Hashtag] Fetching posts from hashtags: ${hashtags.join(', ')}`)
+
+  try {
+    const runResponse = await fetch(
+      `${APIFY_API_BASE}/acts/apify~instagram-hashtag-scraper/runs?token=${apiToken}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hashtags: hashtags,
+          resultsLimit: Math.ceil(limit / hashtags.length),
+          resultsType: 'posts',
+        }),
+      }
+    )
+
+    if (!runResponse.ok) {
+      const errorText = await runResponse.text()
+      throw new Error(`Apify Hashtag API error: ${runResponse.status} - ${errorText}`)
+    }
+
+    const runData = await runResponse.json()
+    const runId = runData.data.id
+
+    console.log(`[Apify Hashtag] Run started: ${runId}`)
+
+    // Poll for completion
+    let status = 'RUNNING'
+    let attempts = 0
+    const maxAttempts = 90
+
+    while (status === 'RUNNING' || status === 'READY') {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      attempts++
+
+      if (attempts >= maxAttempts) {
+        throw new Error('Apify Hashtag scraper timeout')
+      }
+
+      const statusResponse = await fetch(
+        `${APIFY_API_BASE}/actor-runs/${runId}?token=${apiToken}`
+      )
+      const statusData = await statusResponse.json()
+      status = statusData.data.status
+
+      if (attempts % 15 === 0) {
+        console.log(`[Apify Hashtag] Status: ${status} (${attempts * 2}s)`)
+      }
+    }
+
+    if (status !== 'SUCCEEDED') {
+      throw new Error(`Apify Hashtag scraper failed: ${status}`)
+    }
+
+    const datasetId = runData.data.defaultDatasetId
+    const resultsResponse = await fetch(
+      `${APIFY_API_BASE}/datasets/${datasetId}/items?token=${apiToken}`
+    )
+
+    const rawResults = await resultsResponse.json()
+
+    const posts: HashtagPost[] = rawResults
+      .filter((item: Record<string, unknown>) => item.ownerUsername)
+      .map((item: Record<string, unknown>) => ({
+        username: item.ownerUsername as string,
+        shortCode: item.shortCode as string || '',
+        likesCount: item.likesCount as number || 0,
+        commentsCount: item.commentsCount as number || 0,
+        ownerFollowers: item.ownerFollowersCount as number || undefined,
+      }))
+
+    console.log(`[Apify Hashtag] Found ${posts.length} posts`)
+
+    return posts
+
+  } catch (error) {
+    console.error('[Apify Hashtag] Error:', error)
+    throw error
+  }
+}
+
+/**
+ * Get unique influencer usernames from hashtag posts
+ */
+export function getInfluencersFromHashtags(
+  posts: HashtagPost[],
+  minFollowers: number = 5000,
+  limit: number = 10
+): string[] {
+  // Group by username and calculate engagement
+  const userMap = new Map<string, { engagement: number; followers?: number }>()
+
+  for (const post of posts) {
+    if (!post.username) continue
+
+    const existing = userMap.get(post.username)
+    const engagement = post.likesCount + post.commentsCount
+
+    if (existing) {
+      existing.engagement += engagement
+      if (post.ownerFollowers) existing.followers = post.ownerFollowers
+    } else {
+      userMap.set(post.username, {
+        engagement,
+        followers: post.ownerFollowers
+      })
+    }
+  }
+
+  // Filter and sort
+  const sorted = Array.from(userMap.entries())
+    .filter(([_, data]) => !data.followers || data.followers >= minFollowers)
+    .sort((a, b) => b[1].engagement - a[1].engagement)
+    .slice(0, limit)
+    .map(([username]) => username)
+
+  console.log(`[Hashtag] Found ${sorted.length} potential influencers`)
+
+  return sorted
 }

@@ -1,4 +1,4 @@
-# NiftyMinds - Influencer Report Generator v4.9
+# NiftyMinds - Influencer Report Generator v5.0
 
 **Automatizovaný systém pre generovanie profesionálnych influencer marketing reportov.**
 
@@ -92,7 +92,34 @@ Otvor: **http://localhost:3001**
 
 ## LOGIKA VYPOCTOV
 
-### 1. ENGAGEMENT RATE BENCHMARK
+### 1. ENGAGEMENT RATE - TRI METRIKY (v5.0)
+
+Kvôli virálnym outlierom počítame ER tromi spôsobmi:
+
+#### A) Výpočet per-post ER
+```javascript
+// Správny spôsob: ER pre každý post, potom agregácia
+postERs = posts.map(post => (post.likes + post.comments) / followers * 100)
+// Výsledok: [44.65%, 37.64%, 6.48%, 2.96%, 2.51%, 1.68%, 1.33%, 1.22%]
+```
+
+#### B) Tri agregačné metódy
+
+| Metrika | Výpočet | Príklad | Použitie |
+|---------|---------|---------|----------|
+| **Priemer** | `sum(ERs) / count` | 12.31% | Celkový prehľad |
+| **Trimmed Mean** | Priemer bez top/bottom 10% | 3.20% | Kompromis |
+| **Medián** | Stredná hodnota | 2.74% | **ROI kalkulácie** |
+
+#### C) Detekcia vysokého rozptylu
+```javascript
+hasHighVariance = (avgER / medianER) > 2
+// Ak true → použije sa medián pre všetky výpočty
+```
+
+---
+
+### 2. ENGAGEMENT RATE BENCHMARK
 
 ER sa meni podla velkosti uctu - mensie ucty maju prirodzene vyssi ER.
 
@@ -113,7 +140,7 @@ Followers         | Poor  | Average | Good  | Excellent
 
 ---
 
-### 2. BOT DETECTION (Audience Quality)
+### 3. BOT DETECTION (Audience Quality)
 
 Kombinacia viacerych signalov na odhad % realnych followerov.
 
@@ -163,7 +190,7 @@ Risk Level:
 
 ---
 
-### 3. VALUE BREAKDOWN (DYNAMICKE HODNOTY)
+### 4. VALUE BREAKDOWN (DYNAMICKE HODNOTY)
 
 Co kupujes ked platis influencerovi? Hodnoty sa DYNAMICKY menia podla kvality influencera.
 
@@ -238,7 +265,7 @@ Interpretacia:
 
 ---
 
-### 4. CONVERSION PREDICTIONS (ak je AOV zadane)
+### 5. CONVERSION PREDICTIONS (ak je AOV zadane)
 
 #### A) SCENARIOVA MATICA (9 kombinacii)
 
@@ -291,7 +318,7 @@ Expected ROI:     +120%
 
 ---
 
-### 5. MARKET VALUE (DYNAMICKE MULTIPLIKATORY)
+### 6. MARKET VALUE (DYNAMICKE MULTIPLIKATORY)
 
 Odhad trhovej hodnoty spoluprace - kolko by ste normalne zaplatili.
 
@@ -324,7 +351,7 @@ Base: 0.50-0.80 CZK/follower
 
 ---
 
-### 6. VIRAL POTENTIAL SCORING (v4.6)
+### 7. VIRAL POTENTIAL SCORING (v4.6)
 
 Meri schopnost influencera vytvorit viralny obsah.
 
@@ -348,7 +375,7 @@ Predikce dosahu:
 
 ---
 
-### 7. CELEBRITY PREMIUM (v4.6)
+### 8. CELEBRITY PREMIUM (v4.6)
 
 Velke ucty maji premium hodnotu - jsou brand samy o sobe.
 
@@ -368,7 +395,7 @@ Final Market Value = Base Market Value × Celebrity Multiplier
 
 ---
 
-### 8. BRAND PARTNERSHIP CLASSIFICATION (v4.6)
+### 9. BRAND PARTNERSHIP CLASSIFICATION (v4.6)
 
 Rozliseni mezi placenou a organickou zmienkou.
 
@@ -394,7 +421,7 @@ Risk Level:
 
 ---
 
-### 9. SOURCE CREDIBILITY (v4.6)
+### 10. SOURCE CREDIBILITY (v4.6)
 
 Dulezitost zdroje informaci pro Brand Safety.
 
@@ -411,7 +438,7 @@ Pravidla:
 
 ---
 
-### 10. CONTROVERSY SEVERITY (v4.6)
+### 11. CONTROVERSY SEVERITY (v4.6)
 
 Presna klasifikace kontroverzii s casovou degradaci.
 
@@ -440,7 +467,7 @@ Tyto se PRESKAKUJI a neovlivnuji brand safety score.
 
 ---
 
-### 11. FINAL SCORE
+### 12. FINAL SCORE
 
 Vazeny priemer styroch komponentov:
 
@@ -619,7 +646,73 @@ Vsechny texty jsou v **ceskem jazyce**.
 
 ## CHANGELOG
 
-### v4.9 (Apríl 2026) - AKTUÁLNA VERZIA
+### v5.0 (Apríl 2026) - AKTUÁLNA VERZIA
+
+#### ENGAGEMENT RATE: PRIEMER vs MEDIÁN vs TRIMMED MEAN
+
+**Problém:** Influenceri s 1-2 virálnymi postami majú skreslený priemer ER.
+
+**Riešenie:** Teraz počítame 3 metriky:
+
+| Metrika | Výpočet | Použitie |
+|---------|---------|----------|
+| **Priemer** | Priemer ER všetkých postov | Celkový prehľad |
+| **Trimmed Mean** | Priemer bez top/bottom 10% | Kompromis |
+| **Medián** | Stredná hodnota ER | **ROI kalkulácie** |
+
+**Príklad:**
+```
+Post ERs: 44.65%, 37.64%, 6.48%, 2.96%, 2.51%, 1.68%, 1.33%, 1.22%
+
+Priemer:       12.31%  ← skreslený virálnymi postami
+Trimmed Mean:   3.20%  ← bez extrémov (10% orez)
+Medián:         2.74%  ← stredná hodnota
+```
+
+#### DETEKCIA VYSOKÉHO ROZPTYLU (High Variance)
+
+```javascript
+// Ak priemer > 2× medián → hasHighVariance = true
+if (avgER / medianER > 2) {
+  // Použije sa MEDIÁN pre ROI kalkulácie
+  // Zobrazí sa warning v reporte
+}
+```
+
+**Warning v reporte:**
+```
+⚠️ Vysoký rozptyl: Priemer (12.31%) je skreslený virálnymi postami.
+   Pre ROI kalkulácie sa používa Medián (2.74%).
+```
+
+#### FILTER STARÝCH POSTOV (6 mesiacov)
+
+- Posty staršie ako 6 mesiacov sú vyfiltrované z výpočtov
+- Eliminuje pinnuté virálne posty ktoré skresľujú štatistiky
+- V konzole sa loguje ktoré posty boli vyfiltrované
+
+#### OPRAVA VÝPOČTU ER
+
+**Predtým (NESPRÁVNE):**
+```javascript
+avgLikes = 8000
+engagementRate = (avgLikes + avgComments) / followers = 2.13%
+```
+
+**Teraz (SPRÁVNE):**
+```javascript
+// 1. Vypočítaj ER pre KAŽDÝ post
+postERs = posts.map(p => (p.likes + p.comments) / followers * 100)
+
+// 2. Potom priemer/medián/trimmed mean z tých ERs
+avgER = average(postERs)        // 12.31%
+medianER = median(postERs)      // 2.74%
+trimmedMeanER = trimmedMean(postERs)  // 3.20%
+```
+
+---
+
+### v4.9 (Apríl 2026)
 
 #### MULTI-COUNTRY SUPPORT
 - **Nový dropdown: Krajina influencera** - výber z 7 krajín
@@ -809,4 +902,4 @@ open http://localhost:3001
 ---
 
 *NiftyMinds.cz | Influencer Marketing Intelligence*
-*Verzia: 4.9 | Last Updated: 15. apríl 2026*
+*Verzia: 5.0 | Last Updated: 20. apríl 2026*

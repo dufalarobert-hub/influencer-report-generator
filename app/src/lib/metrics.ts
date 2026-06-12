@@ -787,11 +787,28 @@ export function calculateAllMetrics(
     ? Math.max(...videoPosts.map(p => p.videoViewCount || 0))
     : 0
 
-  const avgReelViews = profile.avgVideoViews || 0
-  const avgLikes = profile.avgLikes || 0
-  const avgComments = profile.avgComments || 0
-  const reachMultiplier = profile.reachMultiplier || 0
-  const engagementRate = profile.engagementRate || 0
+  // Use MEDIAN values when high variance is detected (more accurate for outlier profiles)
+  const useMedian = profile.hasHighVariance === true
+  const avgReelViews = useMedian && profile.medianVideoViews
+    ? profile.medianVideoViews
+    : (profile.avgVideoViews || 0)
+  const avgLikes = useMedian && profile.medianLikes
+    ? profile.medianLikes
+    : (profile.avgLikes || 0)
+  const avgComments = useMedian && profile.medianComments
+    ? profile.medianComments
+    : (profile.avgComments || 0)
+  const reachMultiplier = useMedian && profile.medianReachMultiplier
+    ? profile.medianReachMultiplier
+    : (profile.reachMultiplier || 0)
+  const engagementRate = useMedian && profile.medianEngagementRate
+    ? profile.medianEngagementRate
+    : (profile.engagementRate || 0)
+
+  if (useMedian) {
+    console.log(`[Metrics] ⚠ High variance detected - using MEDIAN values for calculations`)
+    console.log(`[Metrics]   ER: ${profile.engagementRate}% (avg) → ${engagementRate}% (median)`)
+  }
 
   // Calculate ER benchmark first (needed for dynamic values)
   const erBenchmark = calculateERBenchmark(engagementRate, profile.followersCount)

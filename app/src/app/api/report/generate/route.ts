@@ -147,7 +147,7 @@ export async function POST(request: NextRequest) {
       metrics,
       text,
       generatedAt: new Date().toISOString(),
-      version: '2.3',
+      version: '5.0',
     }
 
     const duration = Date.now() - startTime

@@ -42,6 +42,18 @@ interface ReportData {
     avgComments: number
     avgVideoViews: number
     reachMultiplier: number
+    // Median values (more robust against outliers)
+    medianLikes?: number
+    medianComments?: number
+    medianVideoViews?: number
+    medianEngagementRate?: number
+    medianReachMultiplier?: number
+    // Trimmed mean (10% cut - compromise)
+    trimmedMeanLikes?: number
+    trimmedMeanComments?: number
+    trimmedMeanVideoViews?: number
+    trimmedMeanEngagementRate?: number
+    hasHighVariance?: boolean
   }
   topPosts: Array<{
     type: string
@@ -575,11 +587,28 @@ export default function PDFReport({ data }: PDFReportProps) {
             </div>
             <div className="bg-white border-2 rounded-md p-3 text-center" style={{ borderColor: '#3333FF' }}>
               <span className="text-2xl font-bold block" style={{ color: '#3333FF' }}>
-                {data.metrics.engagementRate.toFixed(2)}%
+                {data.profile.medianEngagementRate?.toFixed(2) || data.metrics.engagementRate.toFixed(2)}%
               </span>
-              <span className="text-xs text-gray-500 font-semibold mt-1 block">Engagement Rate<br/>(průměr)</span>
+              <span className="text-xs text-gray-500 font-semibold mt-1 block">Engagement Rate<br/>(medián)</span>
             </div>
           </div>
+
+          {/* HIGH VARIANCE WARNING */}
+          {data.profile.hasHighVariance && (
+            <div className="bg-amber-50 border border-amber-300 rounded-md p-3 mt-3">
+              <div className="flex items-start gap-2">
+                <span className="text-amber-500 text-lg">⚠️</span>
+                <div>
+                  <span className="text-xs font-bold text-amber-700 block">Vysoký rozptyl v engagement</span>
+                  <span className="text-xs text-amber-600">
+                    Priemer ({data.profile.engagementRate?.toFixed(2)}%) je výrazne vyšší ako medián ({data.profile.medianEngagementRate?.toFixed(2)}%).
+                    Profil má pravdepodobne 1-2 virálne posty, ktoré skresľujú štatistiky.
+                    <strong> Medián je presnejší ukazovateľ bežného výkonu.</strong>
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* NEW: ER Benchmark Visual */}
           {data.metrics.erBenchmark && (
@@ -836,14 +865,46 @@ export default function PDFReport({ data }: PDFReportProps) {
                   </tr>
                 )
               })}
-              <tr className="bg-gray-50">
-                <td className="py-2 px-3 font-semibold">Průměr</td>
+              <tr className="bg-gray-50 border-t-2 border-gray-300">
+                <td className="py-2 px-3 font-semibold">Priemer</td>
                 <td className="py-2 px-3 text-right font-bold">{formatNumber(data.profile.avgLikes)}</td>
-                <td className="py-2 px-3 text-right font-bold">{Math.round(data.profile.avgComments)}</td>
-                <td className="py-2 px-3 text-right font-bold">{data.metrics.engagementRate.toFixed(2)}%</td>
+                <td className="py-2 px-3 text-right font-bold">{Math.round(data.profile.avgComments || 0)}</td>
+                <td className="py-2 px-3 text-right font-bold">{data.profile.engagementRate?.toFixed(2)}%</td>
               </tr>
+              {/* Trimmed Mean row */}
+              {data.profile.trimmedMeanLikes !== undefined && (
+                <tr className="bg-blue-50">
+                  <td className="py-2 px-3 font-semibold text-blue-700">
+                    Trimmed Mean <span className="text-xs font-normal">(10% orez)</span>
+                  </td>
+                  <td className="py-2 px-3 text-right font-bold text-blue-700">{formatNumber(data.profile.trimmedMeanLikes)}</td>
+                  <td className="py-2 px-3 text-right font-bold text-blue-700">{Math.round(data.profile.trimmedMeanComments || 0)}</td>
+                  <td className="py-2 px-3 text-right font-bold text-blue-700">{data.profile.trimmedMeanEngagementRate?.toFixed(2)}%</td>
+                </tr>
+              )}
+              {/* Median row */}
+              {data.profile.medianLikes !== undefined && (
+                <tr className={data.profile.hasHighVariance ? "bg-green-50" : "bg-gray-50"}>
+                  <td className="py-2 px-3 font-semibold text-green-700">
+                    Medián {data.profile.hasHighVariance && <span className="text-green-600">✓</span>}
+                  </td>
+                  <td className="py-2 px-3 text-right font-bold text-green-700">{formatNumber(data.profile.medianLikes)}</td>
+                  <td className="py-2 px-3 text-right font-bold text-green-700">{Math.round(data.profile.medianComments || 0)}</td>
+                  <td className="py-2 px-3 text-right font-bold text-green-700">{data.profile.medianEngagementRate?.toFixed(2)}%</td>
+                </tr>
+              )}
             </tbody>
           </table>
+
+          {/* Variance warning */}
+          {data.profile.hasHighVariance && (
+            <div className="bg-amber-50 border border-amber-200 rounded-md p-2 mb-3 text-xs">
+              <span className="text-amber-700">
+                ⚠️ <strong>Vysoký rozptyl:</strong> Priemer ({data.profile.engagementRate?.toFixed(2)}%) je skreslený 1-2 virálnymi postami.
+                Pre ROI kalkulácie sa používa <strong className="text-green-700">Medián ({data.profile.medianEngagementRate?.toFixed(2)}%)</strong>.
+              </span>
+            </div>
+          )}
 
           {/* Reels Chart */}
           <div className="bg-white rounded-lg p-3 mb-4 border border-gray-200" style={{ height: '140px' }}>
