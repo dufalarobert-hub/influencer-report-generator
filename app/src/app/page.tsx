@@ -111,11 +111,22 @@ export default function Home() {
     <main className="max-w-[210mm] mx-auto p-4 print:p-0 print:max-w-none">
       {/* Header - Hidden when printing */}
       {showForm && (
-        <div className="print:hidden mb-6">
-          <h1 className="text-3xl font-bold" style={{ color: '#3333FF' }}>
-            nifty — minds
-          </h1>
-          <p className="text-gray-500 text-sm">Influencer Report Generator v5.0</p>
+        <div className="print:hidden mb-6 flex justify-between items-start">
+          <div>
+            <h1 className="text-3xl font-bold" style={{ color: '#3333FF' }}>
+              nifty — minds
+            </h1>
+            <p className="text-gray-500 text-sm">Influencer Report Generator v5.1</p>
+          </div>
+          <button
+            onClick={async () => {
+              await fetch('/api/auth/logout', { method: 'POST' })
+              window.location.href = '/login'
+            }}
+            className="text-xs text-gray-400 hover:text-gray-600 underline"
+          >
+            Odhlásit
+          </button>
         </div>
       )}
 

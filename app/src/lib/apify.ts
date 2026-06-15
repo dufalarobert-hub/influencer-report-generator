@@ -8,6 +8,7 @@
 
 import { createHash } from 'crypto'
 import { promises as fs } from 'fs'
+import os from 'os'
 import path from 'path'
 import { LOOKALIKE_CONFIG } from './types'
 
@@ -68,7 +69,9 @@ const MAX_POST_AGE_MONTHS = 6
 // APIFY ACTOR RUNNER + DISK CACHE
 // ============================================
 
-const CACHE_DIR = path.join(process.cwd(), '.cache', 'apify')
+// os.tmpdir() je zapisovateľný aj na Vercel (read-only FS, len /tmp je voľný).
+// Lokálne to je systémový temp; cache prežije v rámci teplej serverless inštancie.
+const CACHE_DIR = path.join(os.tmpdir(), 'irg-apify-cache')
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
 async function readCache(key: string): Promise<unknown[] | null> {

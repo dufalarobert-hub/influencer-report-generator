@@ -17,6 +17,11 @@ import { performWebResearch, generateReportText } from '@/lib/claude'
 import { calculateAllMetrics } from '@/lib/metrics'
 import { ReportInput, ReportData, ApiResponse, GenerateReportResponse } from '@/lib/types'
 
+// Apify scraping + Claude research trvá 1-3 min → potrebujeme dlhý limit.
+// Vercel: 300 s je strop na Pro pláne (Hobby má len 60 s a report by spadol).
+export const maxDuration = 300
+export const dynamic = 'force-dynamic'
+
 async function fetchCommentAnalysis(profile: InstagramProfile): Promise<CommentAnalysis | undefined> {
   try {
     const topPostsForComments = getTopPosts(profile, 5)
