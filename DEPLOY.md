@@ -7,13 +7,13 @@ Aplikácia je chránená **jedným univerzálnym heslom** — kolega zadá heslo
 
 ## 1. Push na GitHub
 
-Repo je už prepojené s `github.com/niftyminds/Influ-report.git`. Zmeny sú na
-branchi `v5.1-refactor`. Pre nasadenie ich dostaň na hlavnú vetvu:
+Repo je prepojené s `github.com/dufalarobert-hub/influencer-report-generator.git`.
+Aktuálna verzia (v5.1) je už zmergovaná na `main` a pushnutá. Pre budúce zmeny
+ich dostaň na hlavnú vetvu:
 
 ```bash
 cd "/Users/robertdufala/Desktop/Influencer Report Generator"
 git checkout main
-git merge v5.1-refactor
 git push origin main
 ```
 
@@ -24,7 +24,7 @@ git push origin main
 
 ## 2. Vytvor projekt na Vercel
 
-1. [vercel.com](https://vercel.com) → **Add New → Project** → importuj `Influ-report`.
+1. [vercel.com](https://vercel.com) → **Add New → Project** → importuj `influencer-report-generator`.
 2. ⚠️ **Root Directory: `app`** — Next.js appka je v podpriečinku `app/`,
    nie v koreni repa. Toto MUSÍŠ nastaviť (Edit pri "Root Directory").
 3. Framework Preset: **Next.js** (detekuje sa automaticky).

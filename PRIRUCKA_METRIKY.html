@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Příručka k Influencer Reportu — nifty—minds</title>
+<style>
+  :root {
+    --blue: #3333FF;
+    --ink: #111;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --bg: #ffffff;
+    --soft: #f5f6ff;
+    --green: #16a34a;
+    --amber: #d97706;
+    --red: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    line-height: 1.6;
+    margin: 0;
+    background: #eceef5;
+    font-size: 15px;
+  }
+  .page {
+    max-width: 820px;
+    margin: 24px auto;
+    background: var(--bg);
+    padding: 56px 64px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+    border-radius: 6px;
+  }
+
+  /* Header */
+  .masthead {
+    border-bottom: 3px solid var(--ink);
+    padding-bottom: 20px;
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
+  .logo { font-size: 26px; font-weight: 800; letter-spacing: -.5px; }
+  .logo span { color: var(--blue); }
+  .masthead .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .masthead .tag { text-align: right; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+
+  h1 {
+    font-size: 34px;
+    line-height: 1.15;
+    margin: 28px 0 6px;
+    letter-spacing: -.5px;
+  }
+  .lead { color: var(--muted); font-size: 16px; margin: 0 0 8px; }
+
+  .intro {
+    background: var(--soft);
+    border-left: 4px solid var(--blue);
+    padding: 16px 20px;
+    border-radius: 0 8px 8px 0;
+    margin: 24px 0 8px;
+    font-size: 14.5px;
+  }
+
+  h2 {
+    color: var(--blue);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 44px 0 4px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+  }
+  h2 .pg { color: var(--muted); font-weight: 600; }
+  h3 {
+    font-size: 18px;
+    margin: 26px 0 6px;
+  }
+  h3 .ico { margin-right: 6px; }
+  p { margin: 8px 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 14px;
+  }
+  th {
+    background: var(--blue);
+    color: #fff;
+    text-align: left;
+    padding: 9px 12px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    font-weight: 600;
+  }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+
+  .why {
+    background: #fbfbe8;
+    border: 1px solid #ecdc8a;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-size: 14px;
+  }
+  .why b { color: var(--amber); }
+
+  .warn {
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-size: 14px;
+  }
+  .warn b { color: var(--red); }
+
+  .pill { display:inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color:#fff; }
+  .g { background: var(--green); }
+  .a { background: var(--amber); }
+  .r { background: var(--red); }
+
+  .tldr {
+    background: var(--blue);
+    color: #fff;
+    border-radius: 10px;
+    padding: 22px 26px;
+    margin: 40px 0 8px;
+  }
+  .tldr h2 { color: #fff; border: none; padding: 0; margin: 0 0 10px; }
+  .tldr ol { margin: 0; padding-left: 20px; }
+  .tldr li { margin: 5px 0; }
+  .tldr .final { margin-top: 14px; font-size: 15px; font-weight: 600; background: rgba(255,255,255,.15); padding: 10px 14px; border-radius: 8px; }
+
+  .foot { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; display:flex; justify-content: space-between; }
+
+  @media print {
+    body { background: #fff; font-size: 12.5px; }
+    .page { box-shadow: none; margin: 0; max-width: none; padding: 0 8mm; border-radius: 0; }
+    h2 { page-break-after: avoid; }
+    h3 { page-break-after: avoid; }
+    table, .why, .warn, .tldr { page-break-inside: avoid; }
+    @page { size: A4; margin: 14mm; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="masthead">
+    <div>
+      <div class="logo">nifty <span>—</span> minds</div>
+      <div class="sub">Influencer Marketing Intelligence</div>
+    </div>
+    <div class="tag">Příručka k reportu<br>v5.1</div>
+  </div>
+
+  <h1>Jak číst Influencer Report</h1>
+  <p class="lead">Co znamená každá metrika a jaká logika je za ní — průvodce pro tým.</p>
+
+  <div class="intro">
+    <strong>Zlaté pravidlo:</strong> hlavní dvě čísla pro rozhodnutí jsou <b>Final Score</b> a <b>Value Ratio</b>.
+    Podle nich se rozhoduješ, jestli do spolupráce jít. Všechno ostatní v reportu je kontext, který vysvětluje,
+    <em>proč</em> to skóre vyšlo tak, jak vyšlo. Report má 3 strany — projdeme je popořadě.
+  </div>
+
+  <!-- STRANA 1 -->
+  <h2>Strana 1 <span class="pg">— Profil &amp; výkon</span></h2>
+
+  <h3>Základní údaje: Followers / Příspěvky / Verified</h3>
+  <p>Data tažená přímo z Instagramu. <strong>Verified</strong> = modrá fajka (ověřený účet). Sama o sobě
+  velikost účtu nic neříká o kvalitě — malý účet s aktivním publikem může být lepší než velký s mrtvými followery.</p>
+
+  <h3>Performance Overview — tři klíčová čísla</h3>
+  <table>
+    <tr><th>Číslo</th><th>Co znamená</th></tr>
+    <tr><td>Reach (virální)</td><td>Nejsledovanější Reel za posledních 6 měsíců — strop, kam až dokáže dosáhnout.</td></tr>
+    <tr><td>Reach (standard)</td><td>Běžný dosah Reelu (medián) — co realisticky čekat u běžného příspěvku.</td></tr>
+    <tr><td>Engagement Rate (medián)</td><td>Kolik % followerů průměrně reaguje (like + komentář) na příspěvek.</td></tr>
+  </table>
+  <div class="why">
+    <b>Proč medián a ne průměr?</b> Když má účet 1–2 virální příspěvky, průměr je nafouknutý a klame.
+    Medián = „prostřední hodnota" — ukáže reálný běžný výkon. Proto report používá medián pro všechny peněžní výpočty.
+  </div>
+
+  <h3>Engagement Rate Benchmark <span style="font-weight:400;font-size:14px;color:var(--muted)">(POOR → EXCELLENT)</span></h3>
+  <p>ER se hodnotí <strong>podle velikosti účtu</strong>, ne absolutně. Menší účty mají přirozeně vyšší ER než velké.</p>
+  <table>
+    <tr><th>Příklad</th><th>Hodnocení</th></tr>
+    <tr><td>2 % ER při 5 000 followerech</td><td><span class="pill r">POOR</span> — slabé</td></tr>
+    <tr><td>2 % ER při 1 000 000 followerech</td><td><span class="pill g">GOOD/EXCELLENT</span> — výborné</td></tr>
+  </table>
+  <p>Barva a rating rovnou řeknou, jestli je engagement na danou velikost dobrý.</p>
+
+  <h3><span class="ico">🔍</span>Kvalita Publika (detekce botů)</h3>
+  <p>Odhad, kolik % followerů je reálných (0–100 %). Začíná na 85 bodech a přičítá/odečítá podle signálů:</p>
+  <table>
+    <tr><th>Červené vlajky (−)</th><th>Zelené vlajky (+)</th></tr>
+    <tr><td>Víc sledovaných než followerů; podezřele nízký nebo naopak nereálně vysoký ER; skoro žádné komentáře k lajkům.</td>
+        <td>Zdravý poměr follow/followers; kvalitní (smysluplné) komentáře; přiměřený ER na velikost.</td></tr>
+  </table>
+  <p>Risk: <span class="pill g">LOW</span> (&gt;75 %, OK) &nbsp; <span class="pill a">MEDIUM</span> (60–75 %, opatrnost) &nbsp; <span class="pill r">HIGH</span> (&lt;60 %, pozor na koupené followery).</p>
+
+  <h3><span class="ico">💬</span>Kvalita Komentářů</h3>
+  <p>Analýza vzorku komentářů — kolik je „generic" (emoji, „Nice!", boti / engagement pody) vs. „kvalitní" (otázky, názory, delší věty).
+  Vysoké % generic = uměle nafouknutý engagement. <em>Vzorek je malý, ber to jako orientační signál, ne přesné číslo.</em></p>
+
+  <h3><span class="ico">🚀</span>Virální Potenciál (0–10)</h3>
+  <p>Schopnost účtu „vystřelit" virální příspěvek. Počítá se z poměru nejlepšího vs. průměrného Reelu plus konzistence výkonu.
+  Ukazuje tři odhady dosahu: pesimistický / průměr / virální.</p>
+
+  <h3><span class="ico">⭐</span>Celebrity Tier</h3>
+  <p>Bonus pro velké ověřené účty (500K+). Celebrity mají hodnotu samy o sobě — jsou značka, ne jen čísla.</p>
+
+  <!-- STRANA 2 -->
+  <h2>Strana 2 <span class="pg">— Engagement &amp; Hodnota</span></h2>
+
+  <h3>Tabulka Průměr / Trimmed Mean / Medián</h3>
+  <p>Tři způsoby výpočtu engagementu. <strong>Medián</strong> (zelený řádek) je ten, kterému věř — je odolný vůči zkreslení virálními příspěvky.
+  Trimmed Mean (oříznutý průměr) je kompromis mezi průměrem a mediánem.</p>
+
+  <h3>Value Breakdown — „Co dostanu za peníze?"</h3>
+  <p>Jádro reportu. Porovnává <strong>hodnotu, kterou influencer doručí</strong>, s <strong>cenou, kterou za něj platíš</strong>.</p>
+  <table>
+    <tr><th>Položka</th><th>Co znamená</th></tr>
+    <tr><td>Reach Value</td><td>Kolik by stálo dosáhnout stejný počet zhlédnutí přes Meta Ads (placenou reklamu).</td></tr>
+    <tr><td>Engagement Value</td><td>Kolik by stál stejný engagement přes Meta Ads.</td></tr>
+    <tr><td>Content Value</td><td>Kolik by stálo vyrobit ten obsah externě (produkce videí/fotek).</td></tr>
+    <tr><td>CELKOVÁ HODNOTA</td><td><strong>max(Reach, Engagement) + Content</strong></td></tr>
+  </table>
+  <div class="why">
+    <b>Proč „max" a ne součet všech tří?</b> Když kupuješ reklamu, engagement dostáváš v ceně dosahu — jsou to překrývající se věci.
+    Sečíst je by hodnotu uměle zdvojnásobilo. Proto bereme vyšší ze dvou (dosah <em>nebo</em> engagement) plus cenu obsahu navrch.
+    Záměrně konzervativní, aby skóre neklamalo nahoru.
+  </div>
+
+  <h3><span class="ico">⭐</span>VALUE RATIO — nejdůležitější číslo strany 2</h3>
+  <p><strong>Hodnota ÷ Cena.</strong> Kolikanásobek hodnoty dostáváš za své peníze:</p>
+  <table>
+    <tr><th>Value Ratio</th><th>Význam</th></tr>
+    <tr><td>≥ 2.0×</td><td><span class="pill g">Vynikající deal</span></td></tr>
+    <tr><td>1.5 – 2.0×</td><td><span class="pill g">Dobrý deal</span></td></tr>
+    <tr><td>1.0 – 1.5×</td><td><span class="pill a">OK deal</span></td></tr>
+    <tr><td>&lt; 1.0×</td><td><span class="pill r">Předražené</span> — platíš víc, než dostáváš</td></tr>
+  </table>
+
+  <h3>Predikce Konverzí <span style="font-weight:400;font-size:14px;color:var(--muted)">(jen když zadáš AOV — průměrnou hodnotu objednávky)</span></h3>
+  <p>Trychtýř: <strong>Zhlédnutí → Kliknutí → Prodeje → tržby a ROI.</strong></p>
+  <table>
+    <tr><th>Pojem</th><th>Co znamená</th></tr>
+    <tr><td>CTR</td><td>% lidí, co klikne. Na Instagramu realisticky 0.5–2 % — Reels nemají klikatelný odkaz, klik jde přes stories/bio, proto nízká čísla.</td></tr>
+    <tr><td>CR</td><td>% z kliknutí, co nakoupí (1–3 %).</td></tr>
+    <tr><td>Matice scénářů</td><td>Všechny kombinace CTR × CR. Zelené = ziskové, červené = ztrátové. Zvýrazní nejrealističtější scénář podle kvality účtu.</td></tr>
+  </table>
+  <div class="why"><b>Pozor:</b> konverze ber jako orientační odhad, ne záruku — závisí na produktu, ceně i kreativě.</div>
+
+  <!-- STRANA 3 -->
+  <h2>Strana 3 <span class="pg">— Tržní hodnota &amp; Brand Safety</span></h2>
+
+  <h3>Market Value (Konzervativní vs Premium)</h3>
+  <p>Odhad férové ceny spolupráce:</p>
+  <table>
+    <tr><th>Model</th><th>Jak se počítá</th></tr>
+    <tr><td>Konzervativní</td><td>0,25–0,35 Kč/follower × kvalita publika × velikost účtu.</td></tr>
+    <tr><td>Premium</td><td>0,50–0,80 Kč/follower × bonusy (vysoký dosah, výborný ER, verified, celebrity).</td></tr>
+    <tr><td>Nabídka</td><td>Cena, kterou reálně platíš + o kolik % je pod trhem.</td></tr>
+  </table>
+
+  <h3>Risk tabulka (Brand Safety)</h3>
+  <table>
+    <tr><th>Řádek</th><th>Co sleduje</th></tr>
+    <tr><td>Historická kontroverze</td><td>Skandály z minulosti.</td></tr>
+    <tr><td>Aktuální chování</td><td>Jak se chová teď.</td></tr>
+    <tr><td>Mediální prezentace</td><td>Jak o něm píšou média.</td></tr>
+    <tr><td>Komerční přesycení</td><td>Jestli není „přereklamovaný" — moc placených spoluprací = únava publika.</td></tr>
+  </table>
+  <div class="warn">
+    <b>⛔ Červený box „Brand safety NEPROVĚŘENA"</b> = automatický web research selhal. Tehdy číslům o brand safety
+    <strong>nevěř</strong> a influencera si ověř ručně (vygoogli jméno), případně report spusť znovu.
+  </div>
+
+  <h3>Kontroverze &amp; Brand Partnerships</h3>
+  <p>Nalezené skandály (s úrovní závažnosti CRITICAL → LOW) a předchozí spolupráce (placené vs. organické).
+  <em>Vztahové drby se záměrně ignorují — nepoškozují značku.</em></p>
+
+  <h3>Vhodné / Nevhodné pro</h3>
+  <p>Typy značek, ke kterým se influencer hodí a nehodí (podle kategorie a výsledků researche).</p>
+
+  <h3><span class="ico">🏆</span>FINAL VERDICT — Final Score (0–10)</h3>
+  <p>Hlavní rozhodovací číslo. Vážený průměr čtyř složek:</p>
+  <table>
+    <tr><th>Složka</th><th>Váha</th><th>Z čeho</th></tr>
+    <tr><td>Cena / Hodnota</td><td>40 %</td><td>Value Ratio</td></tr>
+    <tr><td>Engagement</td><td>25 %</td><td>ER rating podle velikosti</td></tr>
+    <tr><td>Dosah</td><td>20 %</td><td>Reach multiplier</td></tr>
+    <tr><td>Brand Safety</td><td>15 %</td><td>Web research</td></tr>
+  </table>
+  <table>
+    <tr><th>Final Score</th><th>Doporučení</th></tr>
+    <tr><td>≥ 8.0</td><td><span class="pill g">STRONG BUY</span> — vezmi to</td></tr>
+    <tr><td>6.5 – 8.0</td><td><span class="pill g">BUY</span> — dobrá volba</td></tr>
+    <tr><td>5.0 – 6.5</td><td><span class="pill a">CONSIDER</span> — zvážit, vyjednat cenu</td></tr>
+    <tr><td>&lt; 5.0</td><td><span class="pill r">PASS</span> — raději ne</td></tr>
+  </table>
+
+  <!-- TL;DR -->
+  <div class="tldr">
+    <h2>TL;DR — rychlé rozhodnutí</h2>
+    <ol>
+      <li>Podívej se na <strong>Final Score</strong> (vezmi / zvaž / nech být).</li>
+      <li>Podívej se na <strong>Value Ratio</strong> (jestli cena dává smysl).</li>
+      <li>Zkontroluj <strong>Brand Safety</strong> (žádný červený box, žádné kontroverze).</li>
+      <li>Při pochybnostech mrkni na <strong>Kvalitu Publika</strong> (nejsou to koupení followeři?).</li>
+    </ol>
+    <div class="final">✅ Pokud Final Score ≥ 6.5, Value Ratio ≥ 1.5 a brand safety je čistá → zelená.</div>
+  </div>
+
+  <div class="foot">
+    <span>NiftyMinds — Influencer Report Generator v5.1</span>
+    <span>Příručka k metrikám</span>
+  </div>
+
+</div>
+</body>
+</html>
