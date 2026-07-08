@@ -493,6 +493,7 @@ const RESEARCH_TOOL_SCHEMA = {
               type: { type: 'string', enum: ['paid', 'organic', 'unknown'] },
               date: { type: 'string' },
               category: { type: 'string' },
+              isCompetitor: { type: 'boolean', description: 'true ak značka konkuruje klientovej značke/odvetviu zo zadania' },
             },
             required: ['brandName', 'type'],
           },
@@ -544,7 +545,8 @@ export async function performWebResearch(
   category: string,
   biography: string,
   postCaptions?: string[],
-  country: string = 'CZ'
+  country: string = 'CZ',
+  clientBrand?: string
 ): Promise<WebResearchResult> {
   const client = getClient()
 
@@ -628,6 +630,14 @@ Každú nájdenú značku PRIDAJ do brandPartnerships s typom:
 KROK 4 - BRAND PARTNERSHIPS Z WEBU:
 Zaznamenaj všetky značky s ktorými influencer spolupracuje/spolupracoval
 (ambasádorstvá, kampane, sponzorované príspevky, product placement).
+${clientBrand ? `
+🎯 KROK 4B - KONKURENČNÁ KONTROLA (KĽÚČOVÉ!):
+Tento report sa robí pre klienta: "${sanitizeText(clientBrand)}".
+Pri KAŽDOM nájdenom partnerstve (bio, captions aj web) vyhodnoť, či daná značka
+pôsobí v rovnakom odvetví / predáva konkurenčný produkt ako klient.
+- Ak áno → nastav isCompetitor: true pri danom partnerstve
+- Konkurenčné spolupráce spomeň aj v recommendationText kontexte (sú kritické pre rozhodnutie)
+- Ak si nie si istý odvetvím značky, vyhľadaj si ju cez web_search` : ''}
 
 KRITICKÉ PRE BRAND SAFETY - hľadaj TIETO typy kontroverzií:
 - Politické vyjadrenia, extrémizmus, rasizmus, xenofóbia

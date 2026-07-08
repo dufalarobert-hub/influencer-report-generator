@@ -38,6 +38,7 @@ export default function Home() {
   const [country, setCountry] = useState('CZ')
   const [offeredPrice, setOfferedPrice] = useState('')
   const [averageOrderValue, setAverageOrderValue] = useState('')
+  const [clientBrand, setClientBrand] = useState('')
   // Deliverables
   const [reelsPerMonth, setReelsPerMonth] = useState('2')
   const [postsPerMonth, setPostsPerMonth] = useState('1')
@@ -68,6 +69,7 @@ export default function Home() {
           country,
           offeredPrice: parseInt(offeredPrice),
           averageOrderValue: averageOrderValue ? parseInt(averageOrderValue) : undefined,
+          clientBrand: clientBrand.trim() || undefined,
           deliverables: {
             reelsPerMonth: reelsPerMonth !== '' ? parseInt(reelsPerMonth) : 2,
             postsPerMonth: postsPerMonth !== '' ? parseInt(postsPerMonth) : 1,
@@ -250,6 +252,23 @@ export default function Home() {
             />
             <p className="text-xs text-gray-500 mt-1">
               Ak zadáš priemernú hodnotu objednávky, vypočítame predikciu konverzií a ROI
+            </p>
+          </div>
+
+          {/* Optional: client brand for competitor check */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Klientova značka / odvetvie <span className="text-gray-400 font-normal">— optional, zapne konkurenčnú kontrolu</span>
+            </label>
+            <input
+              type="text"
+              value={clientBrand}
+              onChange={(e) => setClientBrand(e.target.value)}
+              placeholder="napr. Notino (kozmetika e-shop)"
+              className="w-full md:w-1/2 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Research označí spolupráce influencera s konkurenciou tejto značky (⚠️ v reporte)
             </p>
           </div>
 
