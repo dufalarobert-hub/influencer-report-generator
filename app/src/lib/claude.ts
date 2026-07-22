@@ -143,7 +143,9 @@ const REQUEST_TIMEOUT_MS = 90_000
 // Strop je poistka proti zamrznutiu, nie škrtenie kvality: po jeho prekročení
 // sa research vzdá a report pokračuje s fallbackom (researchUnavailable: true
 // → červené varovanie v PDF). Prepísateľné cez env RESEARCH_DEADLINE_MS.
-const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 240_000
+// 200 s: Vercel funkcia ma strop 300 s, k tomu treba nechat cas na Apify (~30 s)
+// a generovanie textu (~20 s), inak by request spadol na 504 uplne bez reportu.
+const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 200_000
 
 /**
  * Initialize Anthropic client
@@ -760,7 +762,9 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
         {
           type: 'web_search_20260209' as const,
           name: 'web_search' as const,
-          max_uses: 5,
+          // 3 na vetvu = 6 spolu, teda viac ako povodnych 5 v jednom volani,
+          // ale kazda vetva skonci skor a zmesti sa do limitu Vercel funkcie.
+          max_uses: 3,
         },
         {
           name: 'submit_research',
