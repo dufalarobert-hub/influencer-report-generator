@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import type { ReportData } from '@/lib/types'
 
@@ -38,6 +38,7 @@ export default function Home() {
   const [country, setCountry] = useState('CZ')
   const [offeredPrice, setOfferedPrice] = useState('')
   const [averageOrderValue, setAverageOrderValue] = useState('')
+  const [clientBrand, setClientBrand] = useState('')
   // Deliverables
   const [reelsPerMonth, setReelsPerMonth] = useState('2')
   const [postsPerMonth, setPostsPerMonth] = useState('1')
@@ -47,6 +48,15 @@ export default function Home() {
   const [reportData, setReportData] = useState<ReportData | null>(null)
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(true)
+  const [elapsed, setElapsed] = useState(0)
+
+  // Počítadlo behu — bez neho user nevie, či to ide alebo zamrzlo
+  useEffect(() => {
+    if (!loading) return
+    setElapsed(0)
+    const id = setInterval(() => setElapsed(s => s + 1), 1000)
+    return () => clearInterval(id)
+  }, [loading])
 
   const generateReport = async () => {
     if (!username.trim() || !offeredPrice) return
@@ -68,17 +78,32 @@ export default function Home() {
           country,
           offeredPrice: parseInt(offeredPrice),
           averageOrderValue: averageOrderValue ? parseInt(averageOrderValue) : undefined,
+          clientBrand: clientBrand.trim() || undefined,
           deliverables: {
             reelsPerMonth: reelsPerMonth !== '' ? parseInt(reelsPerMonth) : 2,
             postsPerMonth: postsPerMonth !== '' ? parseInt(postsPerMonth) : 1,
             storiesPerMonth: storiesPerMonth !== '' ? parseInt(storiesPerMonth) : 4,
           },
         }),
+        // Vercel funkcia má strop 300 s — nikdy nečakaj dlhšie ako ona
+        signal: AbortSignal.timeout(300_000),
       })
 
-      const result = await response.json()
+      // Pri timeoute/chybe infraštruktúry vráti Vercel HTML, nie JSON —
+      // holé response.json() by spadlo na nezrozumiteľnej syntax chybe.
+      const raw = await response.text()
+      let result: { success?: boolean; error?: string; data?: { reportData: ReportData } }
+      try {
+        result = JSON.parse(raw)
+      } catch {
+        throw new Error(
+          response.status === 504
+            ? 'Server nestihl report dokončit v časovém limitu (300 s). Zkuste to prosím znovu — podruhé jsou data z cache a je to rychlejší.'
+            : `Server vrátil neočekávanou odpověď (HTTP ${response.status}).`
+        )
+      }
 
-      if (!result.success) {
+      if (!result.success || !result.data) {
         throw new Error(result.error || 'Failed to generate report')
       }
 
@@ -87,7 +112,13 @@ export default function Home() {
       setShowForm(false)
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong')
+      const message =
+        err instanceof DOMException && err.name === 'TimeoutError'
+          ? 'Generování trvalo déle než 5 minut a bylo přerušeno. Zkuste to prosím znovu.'
+          : err instanceof Error
+            ? err.message
+            : 'Something went wrong'
+      setError(message)
       setProgress('')
     } finally {
       setLoading(false)
@@ -253,6 +284,23 @@ export default function Home() {
             </p>
           </div>
 
+          {/* Optional: client brand for competitor check */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Klientova značka / odvetvie <span className="text-gray-400 font-normal">— optional, zapne konkurenčnú kontrolu</span>
+            </label>
+            <input
+              type="text"
+              value={clientBrand}
+              onChange={(e) => setClientBrand(e.target.value)}
+              placeholder="napr. Notino (kozmetika e-shop)"
+              className="w-full md:w-1/2 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Research označí spolupráce influencera s konkurenciou tejto značky (⚠️ v reporte)
+            </p>
+          </div>
+
           <button
             onClick={generateReport}
             disabled={loading || !username.trim() || !offeredPrice}
@@ -275,7 +323,9 @@ export default function Home() {
         <div className="print:hidden bg-white rounded-lg shadow-md p-8 text-center">
           <div className="animate-spin w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
           <p className="text-gray-600 font-medium">{progress}</p>
-          <p className="text-gray-400 text-sm mt-2">This may take 30-60 seconds...</p>
+          <p className="text-gray-400 text-sm mt-2">
+            Obvykle 2–3 minuty · běží {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
+          </p>
           <div className="mt-4 text-left max-w-md mx-auto">
             <div className="text-xs text-gray-500 space-y-1">
               <p>1. Fetching Instagram profile data...</p>

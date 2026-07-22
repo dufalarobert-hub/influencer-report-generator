@@ -230,6 +230,9 @@ export interface ScoreBreakdown {
   reachScore: number      // 20% - reach multiplier
   brandSafetyScore: number // 15% - research based
   finalScore: number
+  qualityScore: number     // v5.2: kvalita influencera NEZÁVISLE od ceny (ER, reach, safety, publikum)
+  dealScore: number        // v5.2: kvalita dealu (value ratio) — "je táto cena dobrá?"
+  gateApplied?: string     // v5.2: dôvod, prečo bolo odporúčanie obmedzené (safety/boty/research)
   recommendation: 'STRONG BUY' | 'BUY' | 'CONSIDER' | 'PASS'
 }
 
@@ -709,7 +712,9 @@ export function calculateScore(
   valueRatio: number,
   erRating: ERBenchmark['rating'],
   reachMultiplier: number,
-  brandSafetyScore: number = 7.0
+  brandSafetyScore: number = 7.0,
+  audienceQuality?: number,        // 0-100 z bot detection (estimatedQuality)
+  researchUnavailable?: boolean
 ): ScoreBreakdown {
   // Price/Value Score (40%) - based on value ratio
   // valueRatio 1.0 = break even, 2.0 = 2x value, etc.
@@ -753,6 +758,19 @@ export function calculateScore(
     (safetyScore * 0.15)
   )
 
+  // v5.2: Quality Score — kvalita influencera bez vplyvu ceny.
+  // Cena je vyjednávateľná; toto číslo hovorí "je to dobrý influencer?",
+  // dealScore hovorí "je táto cena dobrá?". Publikum (bot detection) tu má
+  // konečne váhu — predtým sa počítalo, ale nikam nevstupovalo.
+  const audienceScore = (audienceQuality ?? 75) / 10  // default 75 = neutrál, keď dáta chýbajú
+  const qualityScore = (
+    (engagementScore * 0.30) +
+    (reachScore * 0.25) +
+    (safetyScore * 0.25) +
+    (audienceScore * 0.20)
+  )
+  const dealScore = priceScore
+
   // Recommendation
   let recommendation: 'STRONG BUY' | 'BUY' | 'CONSIDER' | 'PASS'
   if (finalScore >= 8.0) {
@@ -765,12 +783,36 @@ export function calculateScore(
     recommendation = 'PASS'
   }
 
+  // v5.2: HARD GATES — brand safety a boty nie sú vážený komponent, ale veto.
+  // Kritická kontroverzia alebo kúpené publikum nesmie prejsť na BUY len preto,
+  // že je ponuka lacná (viď vzorový report: 8.65/10 STRONG BUY napriek VYSOKÉ riziku).
+  const gates: string[] = []
+  if (researchUnavailable) {
+    gates.push('Brand safety NEPROVĚŘENA (research zlyhal)')
+  } else if (safetyScore <= 4) {
+    gates.push(`Brand safety ${safetyScore}/10 — vážna kontroverzia`)
+  }
+  if (audienceQuality !== undefined && audienceQuality < 60) {
+    gates.push(`Vysoké riziko botov (kvalita publika ${audienceQuality} %)`)
+  }
+
+  let gateApplied: string | undefined
+  if (gates.length > 0 && (recommendation === 'STRONG BUY' || recommendation === 'BUY')) {
+    recommendation = 'CONSIDER'
+    gateApplied = gates.join(' · ') + ' → odporúčanie obmedzené na CONSIDER'
+  } else if (gates.length > 0) {
+    gateApplied = gates.join(' · ')
+  }
+
   return {
     priceScore: Math.round(priceScore * 100) / 100,
     engagementScore: Math.round(engagementScore * 100) / 100,
     reachScore: Math.round(reachScore * 100) / 100,
     brandSafetyScore: safetyScore,
     finalScore: Math.round(finalScore * 100) / 100,
+    qualityScore: Math.round(qualityScore * 100) / 100,
+    dealScore: Math.round(dealScore * 100) / 100,
+    gateApplied,
     recommendation,
   }
 }
@@ -785,7 +827,8 @@ export function calculateAllMetrics(
   brandSafetyScore: number = 7.0,
   deliverables?: Deliverables,
   averageOrderValue?: number,
-  commentQuality?: { genericRatio: number; meaningfulRatio: number; commentQualityScore: number }
+  commentQuality?: { genericRatio: number; meaningfulRatio: number; commentQualityScore: number },
+  researchUnavailable?: boolean
 ): InfluencerMetrics {
   // Get max reel views
   // Fixed: Filter by videoViewCount only - Apify may return Reels as different types
@@ -861,7 +904,9 @@ export function calculateAllMetrics(
     roi.valueBreakdown.valueRatio,
     erBenchmark.rating,
     reachMultiplier,
-    brandSafetyScore
+    brandSafetyScore,
+    audienceQuality.estimatedQuality,
+    researchUnavailable
   )
 
   return {

@@ -1100,7 +1100,28 @@ export default function PDFReport({ data }: PDFReportProps) {
             <div className="text-sm font-semibold">
               {data.metrics.score.recommendation} – {data.text.verdictText}
             </div>
+            {data.metrics.score.qualityScore !== undefined && (
+              <div className="flex justify-center gap-6 mt-3 pt-3 border-t border-gray-200 text-sm">
+                <div>
+                  <span className="text-gray-500">Kvalita influencera: </span>
+                  <strong>{data.metrics.score.qualityScore.toFixed(1)}/10</strong>
+                  <span className="text-xs text-gray-400"> (bez ceny)</span>
+                </div>
+                <div>
+                  <span className="text-gray-500">Kvalita dealu: </span>
+                  <strong>{data.metrics.score.dealScore.toFixed(1)}/10</strong>
+                  <span className="text-xs text-gray-400"> (cena vs. hodnota)</span>
+                </div>
+              </div>
+            )}
           </div>
+
+          {/* Gate warning — safety/bot veto */}
+          {data.metrics.score.gateApplied && (
+            <div className="bg-red-50 border-2 border-red-400 rounded-md py-2 px-4 mb-4 text-sm text-red-800">
+              <strong>⛔ Gate:</strong> {data.metrics.score.gateApplied}
+            </div>
+          )}
 
           {/* Recommendation Callout */}
           <div className="text-white py-3 px-4 rounded-md text-sm text-left" style={{ backgroundColor: '#3333FF' }}>

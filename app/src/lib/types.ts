@@ -27,6 +27,7 @@ export interface ReportInput {
   country: CountryCode // NEW: Influencer's country
   contractMonths?: number
   averageOrderValue?: number // Optional AOV for conversion predictions
+  clientBrand?: string // Optional: klientova značka/odvetvie — zapne konkurenčnú kontrolu v researchi
 
   // Deliverables per month
   deliverables?: {

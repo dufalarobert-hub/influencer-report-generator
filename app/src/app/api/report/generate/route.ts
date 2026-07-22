@@ -104,7 +104,8 @@ export async function POST(request: NextRequest) {
         input.category,
         baseProfile.biography,
         postCaptions,
-        input.country || 'CZ'
+        input.country || 'CZ',
+        input.clientBrand
       ),
     ])
 
@@ -119,7 +120,8 @@ export async function POST(request: NextRequest) {
       research.brandSafetyScore,
       input.deliverables,
       input.averageOrderValue,
-      commentAnalysis
+      commentAnalysis,
+      research.researchUnavailable
     )
     console.log(`[Step 3/4] ✓ Metrics calculated (score: ${metrics.score.finalScore}/10)`)
 

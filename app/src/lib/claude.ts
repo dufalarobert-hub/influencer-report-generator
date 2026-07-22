@@ -135,9 +135,21 @@ export interface ReportTextContent {
   verdictText: string
 }
 
+// Strop na jedno volanie API (ms). Bez neho SDK čaká defaultných 10 minút.
+const REQUEST_TIMEOUT_MS = 90_000
+
+// Celkový strop na web research vrátane pause_turn pokračovaní (ms).
+// Nameraný research v plnej kvalite trvá ~90-190 s, ojedinele 300-500 s.
+// Strop je poistka proti zamrznutiu, nie škrtenie kvality: po jeho prekročení
+// sa research vzdá a report pokračuje s fallbackom (researchUnavailable: true
+// → červené varovanie v PDF). Prepísateľné cez env RESEARCH_DEADLINE_MS.
+const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 240_000
+
 /**
  * Initialize Anthropic client
- * SDK automaticky retryuje 429/5xx s exponential backoffom (maxRetries)
+ * SDK automaticky retryuje 429/5xx s exponential backoffom (maxRetries).
+ * POZOR: timeouty sa tiež retryujú, takže wall-clock = timeout × (maxRetries + 1)
+ * — preto nízke maxRetries a navyše deadline v performWebResearch().
  */
 function getClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -146,7 +158,7 @@ function getClient(): Anthropic {
     throw new Error('ANTHROPIC_API_KEY is not configured')
   }
 
-  return new Anthropic({ apiKey, maxRetries: 4 })
+  return new Anthropic({ apiKey, maxRetries: 2, timeout: REQUEST_TIMEOUT_MS })
 }
 
 /**
@@ -493,6 +505,7 @@ const RESEARCH_TOOL_SCHEMA = {
               type: { type: 'string', enum: ['paid', 'organic', 'unknown'] },
               date: { type: 'string' },
               category: { type: 'string' },
+              isCompetitor: { type: 'boolean', description: 'true ak značka konkuruje klientovej značke/odvetviu zo zadania' },
             },
             required: ['brandName', 'type'],
           },
@@ -535,6 +548,48 @@ const RESEARCH_TOOL_SCHEMA = {
   ],
 }
 
+// Research bežal ako jedno obrovské volanie (dlhý prompt + celá schéma + 5 searchov),
+// čo trvalo 190-500 s a často nestihlo časový limit. Rozdelené na dve nezávislé
+// polovice, ktoré bežia PARALELNE — rovnaký model aj effort, len polovičný čas.
+const P = RESEARCH_TOOL_SCHEMA.properties
+
+/** Časť A: identita, médiá, kontroverzie, brand safety skóre. */
+const SAFETY_SCHEMA = {
+  type: 'object' as const,
+  properties: {
+    fullName: P.fullName,
+    nickname: P.nickname,
+    occupation: P.occupation,
+    achievements: P.achievements,
+    partnerInfo: P.partnerInfo,
+    mediaAppearances: P.mediaAppearances,
+    upcomingEvents: P.upcomingEvents,
+    recentNews: P.recentNews,
+    controversies: P.controversies,
+    currentBehavior: P.currentBehavior,
+    mediaPresentation: P.mediaPresentation,
+    brandSafetyScore: P.brandSafetyScore,
+    sources: P.sources,
+  },
+  required: [
+    'fullName', 'occupation', 'achievements', 'mediaAppearances', 'upcomingEvents',
+    'recentNews', 'controversies', 'currentBehavior', 'mediaPresentation',
+    'brandSafetyScore', 'sources',
+  ],
+}
+
+/** Časť B: značkové spolupráce a vhodnosť pre značky. */
+const COMMERCIAL_SCHEMA = {
+  type: 'object' as const,
+  properties: {
+    brandPartnerships: P.brandPartnerships,
+    suitableBrands: P.suitableBrands,
+    unsuitableBrands: P.unsuitableBrands,
+    sources: P.sources,
+  },
+  required: ['brandPartnerships', 'suitableBrands', 'unsuitableBrands', 'sources'],
+}
+
 /**
  * Perform web research on an influencer
  */
@@ -544,7 +599,8 @@ export async function performWebResearch(
   category: string,
   biography: string,
   postCaptions?: string[],
-  country: string = 'CZ'
+  country: string = 'CZ',
+  clientBrand?: string
 ): Promise<WebResearchResult> {
   const client = getClient()
 
@@ -561,23 +617,16 @@ export async function performWebResearch(
   const safeName = sanitizeText(fullName)
   const safeBio = sanitizeText(biography).substring(0, 500)
 
-  const prompt = `DÔLEŽITÉ: Použi web_search tool na vyhľadanie OVERENÝCH informácií o tejto osobe a výsledok odovzdaj cez nástroj submit_research!
-
-OSOBA: ${safeName} (@${username})
+  // Spoločná hlavička a pravidlá pre obe vetvy researchu
+  const header = `OSOBA: ${safeName} (@${username})
 KATEGÓRIA: ${category}
 KRAJINA: ${countryConfig.name}
 BIO: ${safeBio}
 
-KROK 1 - POUŽI WEB SEARCH (vyhľadaj všetky):
 Influencer je z krajiny: ${countryConfig.name}
-Hľadaj v jazyku: ${countryConfig.searchLang}
+Hľadaj v jazyku: ${countryConfig.searchLang}`
 
-1. "${safeName}" - základné info, médiá v krajine ${countryConfig.name}
-2. "${safeName}" interview ${currentYear} - aktuálne rozhovory
-3. "${safeName}" ${countryConfig.controversyKeywords} - brand safety
-4. "${safeName}" ${countryConfig.partnershipKeywords} - brand partnerships
-
-⚠️ KRITICKÉ PRAVIDLÁ - DODRŽUJ:
+  const commonRules = `⚠️ KRITICKÉ PRAVIDLÁ - DODRŽUJ:
 1. NEPÍŠ informácie o vzťahoch/rozvodoch/deťoch ak to nie je 100% overené z dôveryhodného zdroja
 2. NEHÁDAJ osobné informácie - ak nevieš, nechaj prázdne
 3. partnerInfo: nechaj PRÁZDNE ak nemáš overený zdroj (radšej nič ako nepravda)
@@ -602,7 +651,18 @@ UPCOMINGEVENTS: Uvádzaj LEN BUDOUCÍ eventy (po dnešním datu)!
 
 ČO NEPATRÍ DO recentNews.headlines:
 ❌ Správy staršie ako 3 mesiace
-❌ "Odfotil sa s fanúšikom", "Bol na párty", "Zverejnil nové foto"
+❌ "Odfotil sa s fanúšikom", "Bol na párty", "Zverejnil nové foto"`
+
+  // ── VETVA B: značkové spolupráce (beží paralelne s vetvou A) ──────────────
+  const commercialPrompt = `DÔLEŽITÉ: Použi web_search a výsledok odovzdaj cez nástroj submit_research!
+Tvojou úlohou sú VÝHRADNE značkové spolupráce a vhodnosť pre značky.
+
+${header}
+
+KROK 1 - POUŽI WEB SEARCH:
+1. "${safeName}" ${countryConfig.partnershipKeywords} - brand partnerships
+
+${commonRules}
 
 KROK 2 - ANALYZUJ BIO NA SPOLUPRÁCE:
 BIO: "${safeBio}"
@@ -628,6 +688,34 @@ Každú nájdenú značku PRIDAJ do brandPartnerships s typom:
 KROK 4 - BRAND PARTNERSHIPS Z WEBU:
 Zaznamenaj všetky značky s ktorými influencer spolupracuje/spolupracoval
 (ambasádorstvá, kampane, sponzorované príspevky, product placement).
+${clientBrand ? `
+🎯 KROK 4B - KONKURENČNÁ KONTROLA (KĽÚČOVÉ!):
+Tento report sa robí pre klienta: "${sanitizeText(clientBrand)}".
+Pri KAŽDOM nájdenom partnerstve (bio, captions aj web) vyhodnoť, či daná značka
+pôsobí v rovnakom odvetví / predáva konkurenčný produkt ako klient.
+- Ak áno → nastav isCompetitor: true pri danom partnerstve
+- Konkurenčné spolupráce spomeň aj v recommendationText kontexte (sú kritické pre rozhodnutie)
+- Ak si nie si istý odvetvím značky, vyhľadaj si ju cez web_search` : ''}
+
+KROK 5 - suitableBrands / unsuitableBrands:
+Na základe kategórie "${category}", obsahu profilu a nájdených spoluprác urč,
+pre aké typy značiek je influencer vhodný a pre aké nie.
+
+KROK 6 - Zavolaj nástroj submit_research so VŠETKÝMI nájdenými spoluprácami.
+⚠️ Radšej nechaj pole PRÁZDNE ako písať neoverené informácie!`
+
+  // ── VETVA A: identita, médiá, kontroverzie, brand safety ─────────────────
+  const safetyPrompt = `DÔLEŽITÉ: Použi web_search tool na vyhľadanie OVERENÝCH informácií o tejto osobe a výsledok odovzdaj cez nástroj submit_research!
+Tvojou úlohou je identita, mediálne výstupy a BRAND SAFETY. Značkové spolupráce NERIEŠ.
+
+${header}
+
+KROK 1 - POUŽI WEB SEARCH (vyhľadaj všetky):
+1. "${safeName}" - základné info, médiá v krajine ${countryConfig.name}
+2. "${safeName}" interview ${currentYear} - aktuálne rozhovory
+3. "${safeName}" ${countryConfig.controversyKeywords} - brand safety
+
+${commonRules}
 
 KRITICKÉ PRE BRAND SAFETY - hľadaj TIETO typy kontroverzií:
 - Politické vyjadrenia, extrémizmus, rasizmus, xenofóbia
@@ -647,10 +735,21 @@ brandSafetyScore škála:
 - 7-8: NÍZKE RIZIKO (drobné alebo neznámy, čistá história)
 - 9-10: BEZPEČNÝ (overene čistý profil, žiadne nálezy)
 
-KROK 5 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETKÝMI nájdenými informáciami.
+KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETKÝMI nájdenými informáciami.
 ⚠️ ZAPAMÄTAJ SI: Radšej nechaj pole PRÁZDNE ako písať neoverené informácie!`
 
-  try {
+  const deadline = Date.now() + RESEARCH_DEADLINE_MS
+  const remaining = () => deadline - Date.now()
+
+  /**
+   * Odbehne jednu vetvu researchu. Vracia surový objekt zo submit_research,
+   * alebo null ak vetva zlyhala (druhá vetva tým nie je dotknutá).
+   */
+  const runLeg = async (
+    label: string,
+    prompt: string,
+    schema: object
+  ): Promise<Record<string, unknown> | null> => {
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: prompt }]
 
     const createParams = {
@@ -666,32 +765,48 @@ KROK 5 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
         {
           name: 'submit_research',
           description: 'Odovzdaj finálne výsledky researchu o influencerovi. Zavolaj PRÁVE RAZ na konci, po dokončení všetkých web searchov.',
-          input_schema: RESEARCH_TOOL_SCHEMA,
+          input_schema: schema,
         },
       ],
     }
 
-    let response = await client.messages.create({ ...createParams, messages } as Anthropic.MessageCreateParamsNonStreaming)
+    // AbortSignal (na rozdiel od `timeout`) sa neretryuje — bez neho by SDK
+    // po timeoute skúšalo znova a celkový čas by bol timeout × (maxRetries + 1).
+    const call = () =>
+      client.messages.create(
+        { ...createParams, messages } as Anthropic.MessageCreateParamsNonStreaming,
+        {
+          signal: AbortSignal.timeout(Math.max(remaining(), 1_000)),
+          timeout: Math.max(remaining(), 1_000),
+          maxRetries: 1,
+        }
+      )
 
-    // Server-side web search môže vrátiť pause_turn — pokračuj v ture
-    let continuations = 0
-    while (response.stop_reason === 'pause_turn' && continuations < 5) {
-      messages.push({ role: 'assistant', content: response.content })
-      response = await client.messages.create({ ...createParams, messages } as Anthropic.MessageCreateParamsNonStreaming)
-      continuations++
-    }
+    try {
+      const started = Date.now()
+      let response = await call()
 
-    console.log('[Claude] Response stop_reason:', response.stop_reason)
+      // Server-side web search môže vrátiť pause_turn — pokračuj v ture,
+      // ale nikdy nie za hranicu deadlinu (inak report zamrzne).
+      let continuations = 0
+      while (response.stop_reason === 'pause_turn' && continuations < 5) {
+        if (remaining() <= 5_000) {
+          console.warn(`[Claude:${label}] ⚠ Deadline vyčerpaný po ${continuations} pokračovaniach — končím`)
+          break
+        }
+        messages.push({ role: 'assistant', content: response.content })
+        response = await call()
+        continuations++
+      }
 
-    // Extract the submit_research tool call
-    const toolUse = response.content.find(
-      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'submit_research'
-    )
+      const secs = ((Date.now() - started) / 1000).toFixed(0)
+      console.log(`[Claude:${label}] hotovo za ${secs}s (stop_reason: ${response.stop_reason})`)
 
-    let rawResult: unknown
-    if (toolUse) {
-      rawResult = toolUse.input
-    } else {
+      const toolUse = response.content.find(
+        (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'submit_research'
+      )
+      if (toolUse) return toolUse.input as Record<string, unknown>
+
       // Fallback: model skončil textom — skús nájsť JSON v texte
       const textContent = response.content
         .filter((b): b is Anthropic.TextBlock => b.type === 'text')
@@ -699,17 +814,46 @@ KROK 5 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
         .join('')
       const jsonMatch = textContent.match(/\{[\s\S]*\}/)
       if (!jsonMatch) {
-        console.error('[Claude] No submit_research tool call and no JSON in text')
-        return getDefaultResearchResult(fullName, category)
+        console.error(`[Claude:${label}] Žiadny submit_research ani JSON v texte`)
+        return null
       }
-      rawResult = JSON.parse(jsonMatch[0])
+      return JSON.parse(jsonMatch[0]) as Record<string, unknown>
+    } catch (error) {
+      console.error(`[Claude:${label}] Zlyhalo:`, error instanceof Error ? error.message : error)
+      return null
     }
+  }
+
+  try {
+    // Obe vetvy bežia súčasne → celkový čas = tá pomalšia, nie súčet
+    const [safetyRaw, commercialRaw] = await Promise.all([
+      runLeg('safety', safetyPrompt, SAFETY_SCHEMA),
+      runLeg('commercial', commercialPrompt, COMMERCIAL_SCHEMA),
+    ])
+
+    // Brand safety je pre report kritická — bez nej je research nepoužiteľný.
+    // Samotné spolupráce chýbať môžu, report to prežije.
+    if (!safetyRaw) {
+      console.error('[Claude] Safety vetva zlyhala → UNVERIFIED defaults')
+      return getDefaultResearchResult(fullName, category)
+    }
+    if (!commercialRaw) {
+      console.warn('[Claude] ⚠ Commercial vetva zlyhala — report bez značkových spoluprác')
+    }
+
+    const safety = cleanObjectFromCitations(safetyRaw) as Partial<WebResearchResult>
+    const commercial = (commercialRaw ? cleanObjectFromCitations(commercialRaw) : {}) as Partial<WebResearchResult>
+
+    // Zdroje sa zbierajú z oboch vetiev (bez duplikátov)
+    const mergedSources = Array.from(new Set([...(safety.sources || []), ...(commercial.sources || [])]))
 
     // Merge with defaults so missing fields never break downstream code
     const defaults = getDefaultResearchResult(fullName, category)
     let result = {
       ...defaults,
-      ...(cleanObjectFromCitations(rawResult) as Partial<WebResearchResult>),
+      ...safety,
+      ...commercial,
+      sources: mergedSources,
       researchUnavailable: false,
     } as WebResearchResult
 

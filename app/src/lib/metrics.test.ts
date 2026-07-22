@@ -55,6 +55,41 @@ describe('calculateScore — vážený priemer s ER ratingom', () => {
   })
 })
 
+describe('calculateScore v5.2 — gates a quality/deal split', () => {
+  it('brand safety ≤ 4 capne STRONG BUY na CONSIDER', () => {
+    const s = calculateScore(3.0, 'EXCELLENT', 5, 3)
+    expect(s.recommendation).toBe('CONSIDER')
+    expect(s.gateApplied).toContain('Brand safety')
+  })
+
+  it('zlyhaný research capne odporúčanie aj pri neutrálnom score 5', () => {
+    const s = calculateScore(3.0, 'EXCELLENT', 5, 5, undefined, true)
+    expect(s.recommendation).toBe('CONSIDER')
+    expect(s.gateApplied).toContain('NEPROVĚŘENA')
+  })
+
+  it('vysoké riziko botov (<60 %) capne odporúčanie', () => {
+    const s = calculateScore(3.0, 'EXCELLENT', 5, 10, 45)
+    expect(s.recommendation).toBe('CONSIDER')
+    expect(s.gateApplied).toContain('botov')
+  })
+
+  it('čistý profil bez gate — quality a deal score sa počítajú', () => {
+    const s = calculateScore(3.0, 'EXCELLENT', 5, 10, 90)
+    expect(s.recommendation).toBe('STRONG BUY')
+    expect(s.gateApplied).toBeUndefined()
+    expect(s.dealScore).toBe(10)
+    // quality = 10×0.30 + 10×0.25 + 10×0.25 + 9×0.20 = 9.8
+    expect(s.qualityScore).toBeCloseTo(9.8, 2)
+  })
+
+  it('lacná ponuka nezakryje slabého influencera v quality score', () => {
+    const s = calculateScore(3.0, 'POOR', 0.3, 5, 55)
+    expect(s.dealScore).toBe(10)
+    expect(s.qualityScore).toBeLessThan(5)
+  })
+})
+
 describe('calculateValueBreakdown — žiadne dvojité počítanie média', () => {
   const delivery = estimateDelivery(50_000, 120_000, 3_000, 100, {
     reelsPerMonth: 2,
