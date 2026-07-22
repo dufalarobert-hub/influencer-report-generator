@@ -383,6 +383,16 @@ export async function fetchInstagramData(username: string): Promise<InstagramPro
     hasHighVariance,
   }
 
+  // Scraper občas vráti prázdny/zástupný profil (0 followerov, 0 postov) namiesto
+  // chyby — napr. pri preklepe v mene, privátnom alebo zrušenom účte. Bez tejto
+  // kontroly by z toho vznikol nezmyselný report so skóre vypočítaným z núl.
+  if (followersCount === 0 || latestPosts.length === 0) {
+    throw new Error(
+      `Profil @${cleanUsername} se nepodařilo načíst (vráceno ${followersCount} sledujících, ${latestPosts.length} příspěvků). ` +
+      `Zkontrolujte správnost uživatelského jména — účet může být soukromý, smazaný nebo bez příspěvků.`
+    )
+  }
+
   console.log(`[Apify] Success! @${cleanUsername}: ${followersCount} followers, ${latestPosts.length} posts`)
   console.log(`[Apify] ER: ${profile.engagementRate}% (avg) / ${profile.trimmedMeanEngagementRate}% (trimmed) / ${profile.medianEngagementRate}% (median)${hasHighVariance ? ' ⚠️ HIGH VARIANCE' : ''}`)
 
