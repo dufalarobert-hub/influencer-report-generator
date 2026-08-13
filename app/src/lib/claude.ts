@@ -143,9 +143,11 @@ const REQUEST_TIMEOUT_MS = 90_000
 // Strop je poistka proti zamrznutiu, nie škrtenie kvality: po jeho prekročení
 // sa research vzdá a report pokračuje s fallbackom (researchUnavailable: true
 // → červené varovanie v PDF). Prepísateľné cez env RESEARCH_DEADLINE_MS.
-// 200 s: Vercel funkcia ma strop 300 s, k tomu treba nechat cas na Apify (~30 s)
-// a generovanie textu (~20 s), inak by request spadol na 504 uplne bez reportu.
-const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 200_000
+// 240 s: Vercel funkcia ma strop 300 s. Research bezi paralelne s Apify reel/
+// comment krokmi, potom ostava profil fetch (~10-40 s) + generovanie textu (~20 s).
+// 240 s necha ~60 s rezervu, inak by cely request spadol na 504 bez reportu.
+// S 3 vetvami je deadline len poistka pre pomale dni — bezne dobehnu skor.
+const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 240_000
 
 /**
  * Initialize Anthropic client
@@ -223,6 +225,55 @@ function cleanObjectFromCitations(obj: unknown): unknown {
     return cleaned
   }
   return obj
+}
+
+/**
+ * Vynúti, že poľové vlastnosti researchu sú naozaj polia a vnorené objekty
+ * existujú. Nástrojová schéma nie je `strict`, takže model (Opus 4.8) môže
+ * vrátiť napr. `achievements` ako reťazec namiesto poľa — potom `.join()` /
+ * `.map()` v generovaní textu aj v PDF spadne a CELÝ report vráti 500.
+ * Táto normalizácia je jediné choke-point miesto, ktoré tomu zabráni.
+ */
+function normalizeResearchResult(r: WebResearchResult): WebResearchResult {
+  const arr = <T>(x: unknown): T[] => (Array.isArray(x) ? (x as T[]) : [])
+  const obj = (x: unknown): Record<string, unknown> =>
+    x && typeof x === 'object' && !Array.isArray(x) ? (x as Record<string, unknown>) : {}
+
+  const media = obj(r.mediaAppearances)
+  const events = obj(r.upcomingEvents)
+  const news = obj(r.recentNews)
+  const partners = obj(r.brandPartnerships)
+  const contro = obj(r.controversies)
+
+  return {
+    ...r,
+    achievements: arr<string>(r.achievements),
+    mediaAppearances: {
+      tvShows: arr<string>(media.tvShows),
+      interviews: arr<string>(media.interviews),
+      articles: arr<string>(media.articles),
+    },
+    upcomingEvents: {
+      hasEvents: Boolean(events.hasEvents),
+      events: arr<string>(events.events),
+    },
+    recentNews: {
+      hasNews: Boolean(news.hasNews),
+      headlines: arr<string>(news.headlines),
+    },
+    brandPartnerships: {
+      found: Boolean(partners.found),
+      partnerships: arr<WebResearchResult['brandPartnerships']['partnerships'][number]>(partners.partnerships),
+      organicBrands: arr<string>(partners.organicBrands),
+    },
+    controversies: {
+      found: Boolean(contro.found),
+      items: arr<WebResearchResult['controversies']['items'][number]>(contro.items),
+    },
+    suitableBrands: arr<string>(r.suitableBrands),
+    unsuitableBrands: arr<string>(r.unsuitableBrands),
+    sources: arr<string>(r.sources),
+  }
 }
 
 /**
@@ -551,12 +602,13 @@ const RESEARCH_TOOL_SCHEMA = {
 }
 
 // Research bežal ako jedno obrovské volanie (dlhý prompt + celá schéma + 5 searchov),
-// čo trvalo 190-500 s a často nestihlo časový limit. Rozdelené na dve nezávislé
-// polovice, ktoré bežia PARALELNE — rovnaký model aj effort, len polovičný čas.
+// čo trvalo 190-500 s a často nestihlo časový limit. Rozdelené na TRI nezávislé
+// vetvy, ktoré bežia PARALELNE — rovnaký model aj effort, len každá s užším
+// zadaním, takže každá skončí skôr a celkový čas = tá najpomalšia (nie súčet).
 const P = RESEARCH_TOOL_SCHEMA.properties
 
-/** Časť A: identita, médiá, kontroverzie, brand safety skóre. */
-const SAFETY_SCHEMA = {
+/** Vetva 1: identita, achievements, médiá, eventy, aktuálne správy. */
+const PROFILE_SCHEMA = {
   type: 'object' as const,
   properties: {
     fullName: P.fullName,
@@ -567,6 +619,18 @@ const SAFETY_SCHEMA = {
     mediaAppearances: P.mediaAppearances,
     upcomingEvents: P.upcomingEvents,
     recentNews: P.recentNews,
+    sources: P.sources,
+  },
+  required: [
+    'fullName', 'occupation', 'achievements', 'mediaAppearances',
+    'upcomingEvents', 'recentNews', 'sources',
+  ],
+}
+
+/** Vetva 2: brand safety — kontroverzie, správanie, mediálna prezentácia, skóre. */
+const SAFETY_SCHEMA = {
+  type: 'object' as const,
+  properties: {
     controversies: P.controversies,
     currentBehavior: P.currentBehavior,
     mediaPresentation: P.mediaPresentation,
@@ -574,13 +638,11 @@ const SAFETY_SCHEMA = {
     sources: P.sources,
   },
   required: [
-    'fullName', 'occupation', 'achievements', 'mediaAppearances', 'upcomingEvents',
-    'recentNews', 'controversies', 'currentBehavior', 'mediaPresentation',
-    'brandSafetyScore', 'sources',
+    'controversies', 'currentBehavior', 'mediaPresentation', 'brandSafetyScore', 'sources',
   ],
 }
 
-/** Časť B: značkové spolupráce a vhodnosť pre značky. */
+/** Vetva 3: značkové spolupráce a vhodnosť pre značky. */
 const COMMERCIAL_SCHEMA = {
   type: 'object' as const,
   properties: {
@@ -706,16 +768,32 @@ pre aké typy značiek je influencer vhodný a pre aké nie.
 KROK 6 - Zavolaj nástroj submit_research so VŠETKÝMI nájdenými spoluprácami.
 ⚠️ Radšej nechaj pole PRÁZDNE ako písať neoverené informácie!`
 
-  // ── VETVA A: identita, médiá, kontroverzie, brand safety ─────────────────
-  const safetyPrompt = `DÔLEŽITÉ: Použi web_search tool na vyhľadanie OVERENÝCH informácií o tejto osobe a výsledok odovzdaj cez nástroj submit_research!
-Tvojou úlohou je identita, mediálne výstupy a BRAND SAFETY. Značkové spolupráce NERIEŠ.
+  // ── VETVA A: identita, médiá, eventy, správy (žiadna brand safety) ───────
+  const profilePrompt = `DÔLEŽITÉ: Použi web_search tool na vyhľadanie OVERENÝCH informácií o tejto osobe a výsledok odovzdaj cez nástroj submit_research!
+Tvojou úlohou je IDENTITA a MEDIÁLNE VÝSTUPY. Kontroverzie ani spolupráce NERIEŠ.
 
 ${header}
 
-KROK 1 - POUŽI WEB SEARCH (vyhľadaj všetky):
-1. "${safeName}" - základné info, médiá v krajine ${countryConfig.name}
-2. "${safeName}" interview ${currentYear} - aktuálne rozhovory
-3. "${safeName}" ${countryConfig.controversyKeywords} - brand safety
+KROK 1 - POUŽI WEB SEARCH:
+1. "${safeName}" - základné info, čím sa preslávil, médiá v krajine ${countryConfig.name}
+2. "${safeName}" interview ${currentYear} - aktuálne rozhovory a vystúpenia
+
+${commonRules}
+
+Vyplň: occupation, achievements, mediaAppearances (TV/rozhovory/články),
+upcomingEvents (len budúce), recentNews (len z posledných 3 mesiacov).
+
+KROK 2 - Zavolaj nástroj submit_research so VŠETKÝMI nájdenými informáciami.
+⚠️ Radšej nechaj pole PRÁZDNE ako písať neoverené informácie!`
+
+  // ── VETVA B: brand safety (kontroverzie, správanie, skóre) ───────────────
+  const safetyPrompt = `DÔLEŽITÉ: Použi web_search tool na overenie BRAND SAFETY tejto osoby a výsledok odovzdaj cez nástroj submit_research!
+Tvojou JEDINOU úlohou je brand safety. Identitu, médiá ani spolupráce NERIEŠ.
+
+${header}
+
+KROK 1 - POUŽI WEB SEARCH:
+1. "${safeName}" ${countryConfig.controversyKeywords} - kontroverzie, škandály
 
 ${commonRules}
 
@@ -829,37 +907,50 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
   }
 
   try {
-    // Obe vetvy bežia súčasne → celkový čas = tá pomalšia, nie súčet
-    const [safetyRaw, commercialRaw] = await Promise.all([
+    // Tri vetvy bežia súčasne → celkový čas = tá najpomalšia, nie súčet
+    const [profileRaw, safetyRaw, commercialRaw] = await Promise.all([
+      runLeg('profile', profilePrompt, PROFILE_SCHEMA),
       runLeg('safety', safetyPrompt, SAFETY_SCHEMA),
       runLeg('commercial', commercialPrompt, COMMERCIAL_SCHEMA),
     ])
 
-    // Brand safety je pre report kritická — bez nej je research nepoužiteľný.
-    // Samotné spolupráce chýbať môžu, report to prežije.
+    // Brand safety je pre report kritická — bez nej je celý research nepreverený.
+    // Identita (profile) aj spolupráce (commercial) môžu chýbať, report to prežije
+    // (doplnia sa defaulty). researchUnavailable riadi len zlyhanie safety vetvy.
     if (!safetyRaw) {
-      console.error('[Claude] Safety vetva zlyhala → UNVERIFIED defaults')
-      return getDefaultResearchResult(fullName, category)
+      console.error('[Claude] Safety vetva zlyhala → brand safety NEPREVERENÁ')
+    }
+    if (!profileRaw) {
+      console.warn('[Claude] ⚠ Profile vetva zlyhala — identita/médiá z defaultov')
     }
     if (!commercialRaw) {
       console.warn('[Claude] ⚠ Commercial vetva zlyhala — report bez značkových spoluprác')
     }
 
-    const safety = cleanObjectFromCitations(safetyRaw) as Partial<WebResearchResult>
+    const profile = (profileRaw ? cleanObjectFromCitations(profileRaw) : {}) as Partial<WebResearchResult>
+    const safety = (safetyRaw ? cleanObjectFromCitations(safetyRaw) : {}) as Partial<WebResearchResult>
     const commercial = (commercialRaw ? cleanObjectFromCitations(commercialRaw) : {}) as Partial<WebResearchResult>
 
-    // Zdroje sa zbierajú z oboch vetiev (bez duplikátov)
-    const mergedSources = Array.from(new Set([...(safety.sources || []), ...(commercial.sources || [])]))
+    // Zdroje sa zbierajú zo všetkých vetiev (bez duplikátov)
+    const mergedSources = Array.from(new Set([
+      ...(profile.sources || []), ...(safety.sources || []), ...(commercial.sources || []),
+    ]))
 
     // Merge with defaults so missing fields never break downstream code
     const defaults = getDefaultResearchResult(fullName, category)
     let result = {
       ...defaults,
+      ...profile,
       ...safety,
       ...commercial,
       sources: mergedSources,
-      researchUnavailable: false,
+      // Bez preverenej brand safety je report „nepreverený" (červený box v PDF)
+      researchUnavailable: !safetyRaw,
     } as WebResearchResult
+
+    // Model môže vrátiť polia v zlom tvare (reťazec namiesto poľa) → bez tejto
+    // normalizácie by .join()/.map() nižšie zhodilo celý report na HTTP 500.
+    result = normalizeResearchResult(result)
 
     // POST-PROCESSING: Enhance result with classification logic
 
