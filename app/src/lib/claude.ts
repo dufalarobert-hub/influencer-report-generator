@@ -143,12 +143,13 @@ const REQUEST_TIMEOUT_MS = 90_000
 // Strop je poistka proti zamrznutiu, nie škrtenie kvality: po jeho prekročení
 // sa research vzdá a report pokračuje s fallbackom (researchUnavailable: true
 // → červené varovanie v PDF). Prepísateľné cez env RESEARCH_DEADLINE_MS.
-// 210 s: Vercel funkcia ma strop 300 s. Bezpecna rezerva pre PRODUKCIU, kde Step 1
-// (profil fetch) moze byt pomalsi (cold start, latencia) — celkovy cas ostava pod
-// ~270 s. Research bezi PARALELNE s Apify reel/comment krokmi. Ked sa vetva zasekne
-// za 210 s, stratí sa len JEJ data (elegantna degradacia): safety vypadne → cerveny
-// box, commercial vypadne → report bez spoluprac. Prepisatelne cez RESEARCH_DEADLINE_MS.
-const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 210_000
+// 240 s: Vercel funkcia ma strop 300 s. NAMERANE NA PRODUKCII: rezia okolo
+// researchu (Step 1 profil fetch + generovanie textu) je len ~23 s, cize 240 s
+// research → ~265 s celkovo, stale ~35 s rezerva. Research bezi PARALELNE s Apify
+// reel/comment krokmi. Ked sa vetva zasekne aj za 240 s, strati sa len JEJ data
+// (elegantna degradacia): safety vypadne → cerveny box, commercial → bez spoluprac.
+// Prepisatelne cez RESEARCH_DEADLINE_MS.
+const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 240_000
 
 /**
  * Initialize Anthropic client
