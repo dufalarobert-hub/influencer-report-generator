@@ -143,9 +143,12 @@ const REQUEST_TIMEOUT_MS = 90_000
 // Strop je poistka proti zamrznutiu, nie škrtenie kvality: po jeho prekročení
 // sa research vzdá a report pokračuje s fallbackom (researchUnavailable: true
 // → červené varovanie v PDF). Prepísateľné cez env RESEARCH_DEADLINE_MS.
-// 200 s: Vercel funkcia ma strop 300 s, k tomu treba nechat cas na Apify (~30 s)
-// a generovanie textu (~20 s), inak by request spadol na 504 uplne bez reportu.
-const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 200_000
+// 210 s: Vercel funkcia ma strop 300 s. Bezpecna rezerva pre PRODUKCIU, kde Step 1
+// (profil fetch) moze byt pomalsi (cold start, latencia) — celkovy cas ostava pod
+// ~270 s. Research bezi PARALELNE s Apify reel/comment krokmi. Ked sa vetva zasekne
+// za 210 s, stratí sa len JEJ data (elegantna degradacia): safety vypadne → cerveny
+// box, commercial vypadne → report bez spoluprac. Prepisatelne cez RESEARCH_DEADLINE_MS.
+const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 210_000
 
 /**
  * Initialize Anthropic client
@@ -223,6 +226,55 @@ function cleanObjectFromCitations(obj: unknown): unknown {
     return cleaned
   }
   return obj
+}
+
+/**
+ * Vynúti, že poľové vlastnosti researchu sú naozaj polia a vnorené objekty
+ * existujú. Nástrojová schéma nie je `strict`, takže model (Opus 4.8) môže
+ * vrátiť napr. `achievements` ako reťazec namiesto poľa — potom `.join()` /
+ * `.map()` v generovaní textu aj v PDF spadne a CELÝ report vráti 500.
+ * Táto normalizácia je jediné choke-point miesto, ktoré tomu zabráni.
+ */
+function normalizeResearchResult(r: WebResearchResult): WebResearchResult {
+  const arr = <T>(x: unknown): T[] => (Array.isArray(x) ? (x as T[]) : [])
+  const obj = (x: unknown): Record<string, unknown> =>
+    x && typeof x === 'object' && !Array.isArray(x) ? (x as Record<string, unknown>) : {}
+
+  const media = obj(r.mediaAppearances)
+  const events = obj(r.upcomingEvents)
+  const news = obj(r.recentNews)
+  const partners = obj(r.brandPartnerships)
+  const contro = obj(r.controversies)
+
+  return {
+    ...r,
+    achievements: arr<string>(r.achievements),
+    mediaAppearances: {
+      tvShows: arr<string>(media.tvShows),
+      interviews: arr<string>(media.interviews),
+      articles: arr<string>(media.articles),
+    },
+    upcomingEvents: {
+      hasEvents: Boolean(events.hasEvents),
+      events: arr<string>(events.events),
+    },
+    recentNews: {
+      hasNews: Boolean(news.hasNews),
+      headlines: arr<string>(news.headlines),
+    },
+    brandPartnerships: {
+      found: Boolean(partners.found),
+      partnerships: arr<WebResearchResult['brandPartnerships']['partnerships'][number]>(partners.partnerships),
+      organicBrands: arr<string>(partners.organicBrands),
+    },
+    controversies: {
+      found: Boolean(contro.found),
+      items: arr<WebResearchResult['controversies']['items'][number]>(contro.items),
+    },
+    suitableBrands: arr<string>(r.suitableBrands),
+    unsuitableBrands: arr<string>(r.unsuitableBrands),
+    sources: arr<string>(r.sources),
+  }
 }
 
 /**
@@ -551,11 +603,14 @@ const RESEARCH_TOOL_SCHEMA = {
 }
 
 // Research bežal ako jedno obrovské volanie (dlhý prompt + celá schéma + 5 searchov),
-// čo trvalo 190-500 s a často nestihlo časový limit. Rozdelené na dve nezávislé
-// polovice, ktoré bežia PARALELNE — rovnaký model aj effort, len polovičný čas.
+// čo trvalo 190-500 s a často nestihlo časový limit. Rozdelené na DVE nezávislé
+// vetvy, ktoré bežia PARALELNE — rovnaký model, len každá s užším zadaním.
+// (Skúšané aj 3 vetvy, ale pri veľkej latenčnej premenlivosti API to len zvýšilo
+//  šancu, že jedna vetva bude tá pomalá a dotiahne celok — preto späť na 2.)
+// Spoľahlivosť rieši RESEARCH_EFFORT (medium) — research vždy dobehne v limite.
 const P = RESEARCH_TOOL_SCHEMA.properties
 
-/** Časť A: identita, médiá, kontroverzie, brand safety skóre. */
+/** Vetva A: identita, médiá, eventy, správy + brand safety (má kontext pre skóre). */
 const SAFETY_SCHEMA = {
   type: 'object' as const,
   properties: {
@@ -580,7 +635,7 @@ const SAFETY_SCHEMA = {
   ],
 }
 
-/** Časť B: značkové spolupráce a vhodnosť pre značky. */
+/** Vetva B: značkové spolupráce a vhodnosť pre značky. */
 const COMMERCIAL_SCHEMA = {
   type: 'object' as const,
   properties: {
@@ -706,7 +761,7 @@ pre aké typy značiek je influencer vhodný a pre aké nie.
 KROK 6 - Zavolaj nástroj submit_research so VŠETKÝMI nájdenými spoluprácami.
 ⚠️ Radšej nechaj pole PRÁZDNE ako písať neoverené informácie!`
 
-  // ── VETVA A: identita, médiá, kontroverzie, brand safety ─────────────────
+  // ── VETVA A: identita, médiá + brand safety (má kontext pre presné skóre) ──
   const safetyPrompt = `DÔLEŽITÉ: Použi web_search tool na vyhľadanie OVERENÝCH informácií o tejto osobe a výsledok odovzdaj cez nástroj submit_research!
 Tvojou úlohou je identita, mediálne výstupy a BRAND SAFETY. Značkové spolupráce NERIEŠ.
 
@@ -758,13 +813,16 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
       model: RESEARCH_MODEL,
       max_tokens: 16000,
       thinking: { type: 'adaptive' as const },
+      // 'medium' effort: web searche prebehnú rovnako (identický research obsah),
+      // model len menej „premýšľa" nad výsledkami → čas ~2× dole a hlavne bez
+      // nepredvídateľných 250-500 s výkyvov, takže research VŽDY dobehne v limite.
+      // Prepísateľné cez env RESEARCH_EFFORT (napr. 'high' pre max hĺbku).
+      output_config: { effort: (process.env.RESEARCH_EFFORT || 'medium') as 'low' | 'medium' | 'high' },
       tools: [
         {
           type: 'web_search_20260209' as const,
           name: 'web_search' as const,
-          // 3 na vetvu = 6 spolu, teda viac ako povodnych 5 v jednom volani,
-          // ale kazda vetva skonci skor a zmesti sa do limitu Vercel funkcie.
-          max_uses: 3,
+          max_uses: 4,
         },
         {
           name: 'submit_research',
@@ -835,21 +893,23 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
       runLeg('commercial', commercialPrompt, COMMERCIAL_SCHEMA),
     ])
 
-    // Brand safety je pre report kritická — bez nej je research nepoužiteľný.
-    // Samotné spolupráce chýbať môžu, report to prežije.
+    // Brand safety (safety vetva) je pre report kritická — bez nej je research
+    // nepreverený. Spolupráce (commercial) môžu chýbať, report to prežije
+    // (doplnia sa defaulty). researchUnavailable riadi len zlyhanie safety vetvy.
     if (!safetyRaw) {
-      console.error('[Claude] Safety vetva zlyhala → UNVERIFIED defaults')
-      return getDefaultResearchResult(fullName, category)
+      console.error('[Claude] Safety vetva zlyhala → brand safety NEPREVERENÁ')
     }
     if (!commercialRaw) {
       console.warn('[Claude] ⚠ Commercial vetva zlyhala — report bez značkových spoluprác')
     }
 
-    const safety = cleanObjectFromCitations(safetyRaw) as Partial<WebResearchResult>
+    const safety = (safetyRaw ? cleanObjectFromCitations(safetyRaw) : {}) as Partial<WebResearchResult>
     const commercial = (commercialRaw ? cleanObjectFromCitations(commercialRaw) : {}) as Partial<WebResearchResult>
 
     // Zdroje sa zbierajú z oboch vetiev (bez duplikátov)
-    const mergedSources = Array.from(new Set([...(safety.sources || []), ...(commercial.sources || [])]))
+    const mergedSources = Array.from(new Set([
+      ...(safety.sources || []), ...(commercial.sources || []),
+    ]))
 
     // Merge with defaults so missing fields never break downstream code
     const defaults = getDefaultResearchResult(fullName, category)
@@ -858,8 +918,13 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
       ...safety,
       ...commercial,
       sources: mergedSources,
-      researchUnavailable: false,
+      // Bez preverenej brand safety je report „nepreverený" (červený box v PDF)
+      researchUnavailable: !safetyRaw,
     } as WebResearchResult
+
+    // Model môže vrátiť polia v zlom tvare (reťazec namiesto poľa) → bez tejto
+    // normalizácie by .join()/.map() nižšie zhodilo celý report na HTTP 500.
+    result = normalizeResearchResult(result)
 
     // POST-PROCESSING: Enhance result with classification logic
 
