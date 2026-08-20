@@ -149,7 +149,7 @@ const REQUEST_TIMEOUT_MS = 90_000
 // reel/comment krokmi. Ked sa vetva zasekne aj za 240 s, strati sa len JEJ data
 // (elegantna degradacia): safety vypadne → cerveny box, commercial → bez spoluprac.
 // Prepisatelne cez RESEARCH_DEADLINE_MS.
-const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 240_000
+const RESEARCH_DEADLINE_MS = Number(process.env.RESEARCH_DEADLINE_MS) || 260_000
 
 /**
  * Initialize Anthropic client
@@ -799,6 +799,10 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
   const deadline = Date.now() + RESEARCH_DEADLINE_MS
   const remaining = () => deadline - Date.now()
 
+  // DOČASNÉ MERANIE (odstrániť po zistení prod časov): koľko reálne beží každá
+  // vetva na produkcii, aby sme vedeli navrhnúť async architektúru.
+  const legTimings: Record<string, string> = {}
+
   /**
    * Odbehne jednu vetvu researchu. Vracia surový objekt zo submit_research,
    * alebo null ak vetva zlyhala (druhá vetva tým nie je dotknutá).
@@ -808,6 +812,7 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
     prompt: string,
     schema: object
   ): Promise<Record<string, unknown> | null> => {
+    const legStart = Date.now()
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: prompt }]
 
     const createParams = {
@@ -863,6 +868,7 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
       }
 
       const secs = ((Date.now() - started) / 1000).toFixed(0)
+      legTimings[label] = `${secs}s OK`
       console.log(`[Claude:${label}] hotovo za ${secs}s (stop_reason: ${response.stop_reason})`)
 
       const toolUse = response.content.find(
@@ -882,7 +888,9 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
       }
       return JSON.parse(jsonMatch[0]) as Record<string, unknown>
     } catch (error) {
-      console.error(`[Claude:${label}] Zlyhalo:`, error instanceof Error ? error.message : error)
+      const secs = ((Date.now() - legStart) / 1000).toFixed(0)
+      legTimings[label] = `${secs}s ABORT`
+      console.error(`[Claude:${label}] Zlyhalo po ${secs}s:`, error instanceof Error ? error.message : error)
       return null
     }
   }
@@ -959,6 +967,8 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
     }
 
     console.log(`[Claude] Research complete. Brand safety score: ${result.brandSafetyScore}`)
+    // DOČASNÉ: časy vetiev do odpovede (odstrániť po zmeraní prod latencie)
+    ;(result as WebResearchResult & { _debugLegTimings?: Record<string, string> })._debugLegTimings = legTimings
     return result
 
   } catch (error) {
