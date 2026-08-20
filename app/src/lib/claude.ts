@@ -608,7 +608,8 @@ const RESEARCH_TOOL_SCHEMA = {
 // vetvy, ktoré bežia PARALELNE — rovnaký model, len každá s užším zadaním.
 // (Skúšané aj 3 vetvy, ale pri veľkej latenčnej premenlivosti API to len zvýšilo
 //  šancu, že jedna vetva bude tá pomalá a dotiahne celok — preto späť na 2.)
-// Spoľahlivosť rieši RESEARCH_EFFORT (medium) — research vždy dobehne v limite.
+// Spoľahlivosť na pomalej produkcii rieši nízky effort (low) + max 2 searche na
+// vetvu — research je zjednodušený tak, aby VŽDY dobehol v 300 s strope Vercelu.
 const P = RESEARCH_TOOL_SCHEMA.properties
 
 /** Vetva A: identita, médiá, eventy, správy + brand safety (má kontext pre skóre). */
@@ -768,10 +769,9 @@ Tvojou úlohou je identita, mediálne výstupy a BRAND SAFETY. Značkové spolup
 
 ${header}
 
-KROK 1 - POUŽI WEB SEARCH (vyhľadaj všetky):
-1. "${safeName}" - základné info, médiá v krajine ${countryConfig.name}
-2. "${safeName}" interview ${currentYear} - aktuálne rozhovory
-3. "${safeName}" ${countryConfig.controversyKeywords} - brand safety
+KROK 1 - POUŽI WEB SEARCH (max 2 vyhľadávania, aby si stihol včas):
+1. "${safeName}" - kto to je, médiá, rozhovory v krajine ${countryConfig.name}
+2. "${safeName}" ${countryConfig.controversyKeywords} - brand safety / kontroverzie
 
 ${commonRules}
 
@@ -814,16 +814,18 @@ KROK 2 - Po dokončení web searchov zavolaj nástroj submit_research so VŠETK�
       model: RESEARCH_MODEL,
       max_tokens: 16000,
       thinking: { type: 'adaptive' as const },
-      // 'medium' effort: web searche prebehnú rovnako (identický research obsah),
-      // model len menej „premýšľa" nad výsledkami → čas ~2× dole a hlavne bez
-      // nepredvídateľných 250-500 s výkyvov, takže research VŽDY dobehne v limite.
-      // Prepísateľné cez env RESEARCH_EFFORT (napr. 'high' pre max hĺbku).
-      output_config: { effort: (process.env.RESEARCH_EFFORT || 'medium') as 'low' | 'medium' | 'high' },
+      // 'low' effort: web searche prebehnú ROVNAKO (identický research obsah),
+      // model len menej „premýšľa" nad výsledkami. Nutné kvôli produkcii, kde je
+      // Anthropic API 3-4× pomalšie než lokálne — pri medium/high research nestíhal
+      // 300 s strop Vercelu a padal do červeného boxu. Low + max 2 searche = dobehne.
+      // Prepísateľné cez env RESEARCH_EFFORT (napr. 'high' pre max hĺbku lokálne).
+      output_config: { effort: (process.env.RESEARCH_EFFORT || 'low') as 'low' | 'medium' | 'high' },
       tools: [
         {
           type: 'web_search_20260209' as const,
           name: 'web_search' as const,
-          max_uses: 4,
+          // Max 2 searche na vetvu — kľúčové pre rýchlosť na pomalej produkcii.
+          max_uses: 2,
         },
         {
           name: 'submit_research',
